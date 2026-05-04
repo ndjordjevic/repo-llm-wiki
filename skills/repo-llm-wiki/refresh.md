@@ -2,7 +2,7 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-`refresh` is one-shot regeneration. Phase 1 does not attempt incremental updates — every page is regenerated. The only difference from `init` is the guard direction and the log entry behaviour.
+`refresh` is one-shot regeneration — every page is regenerated. The only difference from `init` is the guard direction and the log entry behaviour.
 
 ---
 
@@ -40,11 +40,11 @@ Print: *"Refreshing wiki from current HEAD..."*
    - **`wiki/log.md`** — do **not** overwrite. Prepend a new entry at the top (after the `# Generation log` heading and intro paragraph). The new entry uses the template substitutions from `init.md` §4.8 with `{{COMMAND}}` = `refresh`. Existing entries below are preserved verbatim.
    - **`wiki/.archive/`** — leave untouched.
 
-   **Note on stale module pages**: refresh regenerates module pages but does not delete pages from prior runs. If grouping changed (e.g. a Lambda was added and the cluster reshaped), old `wiki/modules/<old-slug>.md` files may remain. `lint` E5 will flag any orphan as a missing index link; the user removes orphans manually. Phase 1 accepts this; auto-pruning is a future improvement.
+   **Note on stale module pages**: refresh regenerates module pages but does not delete pages from prior runs. If grouping changed (e.g. a Lambda was added and the cluster reshaped), old `wiki/modules/<old-slug>.md` files may remain. `lint` E5 will flag any orphan as a missing index link; the user removes orphans manually. Auto-pruning is a future improvement.
 
 5. **`wiki/index.md` staleness suffix**: set `STALE_SUFFIX` empty. After a successful refresh, the new log entry's SHA equals HEAD, so the index is current at the moment this run completes. The `COMMITS_AHEAD` figure computed in step 3 is shown in the completion summary (informational only). The staleness warning in `index.md` is meaningful only between refreshes; `lint` (W1) handles that case.
 
-6. **`AGENTS.md` block**: if the block (`<!-- repo-llm-wiki: begin -->`) already exists, leave the file untouched and print: `AGENTS.md wiki block already present`. Otherwise append the block per `init.md` §4.10. **Never** modify existing block content during `refresh` — Phase 1 treats the block as immutable once present.
+6. **`AGENTS.md` block**: if the block (`<!-- repo-llm-wiki: begin -->`) already exists, leave the file untouched and print: `AGENTS.md wiki block already present`. Otherwise append the block per `init.md` §4.10. **Never** modify existing block content during `refresh` — the block is immutable once present.
 
 ---
 

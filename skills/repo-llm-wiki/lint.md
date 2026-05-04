@@ -96,4 +96,4 @@ Result: <PASS | FAIL>
 `Result: PASS` if `ERRORS` is empty (warnings do not fail).
 `Result: FAIL` otherwise.
 
-Do not auto-fix anything in Phase 1. Print the report and stop.
+Do not auto-fix anything. Print the report and stop.

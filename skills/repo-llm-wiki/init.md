@@ -467,4 +467,4 @@ Run /repo-llm-wiki lint to validate.
 
 ## Atomicity note
 
-Phase 1 writes pages directly to `wiki/`. If a step fails mid-generation, the wiki is in a partial state. Recovery: the user removes `wiki/` and re-runs `init`. A future revision may write to `.wiki.tmp/` and atomic-move on success.
+Pages are written directly to `wiki/`. If a step fails mid-generation, the wiki is in a partial state. Recovery: the user removes `wiki/` and re-runs `init`. A future revision may write to `.wiki.tmp/` and atomic-move on success.

@@ -7,7 +7,6 @@ last_updated: "2026-05-02"
 compatible_agents:
   tested:
     - claude
-  untested:
     - cursor
     - copilot
 
@@ -28,13 +27,12 @@ trigger: "/repo-llm-wiki"
 
 # /repo-llm-wiki
 
-Generates a small, accurate, committable Markdown wiki *inside* a repo, written at the altitude humans and agents actually use. Sibling to `pin-llm-wiki`, which ingests external sources; this one ingests the repo it lives in.
+Generates a small, accurate, committable Markdown wiki *inside* a repo, written at the altitude humans and agents actually use.
 
 ## Trigger phrases
 
 - **`/repo-llm-wiki`** (with subcommands: `init`, `refresh`, `lint`)
 - "Build a wiki from this repo"
-- "Generate the repo wiki"
 - "Refresh the repo-llm-wiki output"
 - "Lint the repo wiki"
 
@@ -48,15 +46,13 @@ wiki/  (committed, cited, agent-readable)
 a healthy, queryable knowledge base
 ```
 
-## Phase 1 subcommands
+## Subcommands
 
-| Command | Status |
+| Command | Description |
 |---|---|
-| `init` | Phase 1 |
-| `refresh` | Phase 1 |
-| `lint` | Phase 1 |
-
-Future phases (not in this skill): live updates from PRs, Jira/Confluence ingestion, wiki-of-wikis.
+| `init` | Scaffold and generate a new wiki |
+| `refresh` | Regenerate wiki from current HEAD |
+| `lint` | Validate wiki health |
 
 ## Skill directory
 

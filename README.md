@@ -16,7 +16,7 @@ wiki/
   overview.md                plain-language summary, tech stack
   architecture.md            component diagram (Mermaid) + data flow
   runbook.md                 prerequisites, build, test, deploy, workflows
-  infra.md                   AWS resources, DynamoDB tables/GSIs, environments (iac-aws only)
+  infra.md                   AWS resources, DynamoDB tables/GSIs, environments (when Terraform files present)
   glossary.md                domain terms drawn from model files
   repo-map.md                directory tree with callouts for loose files, deprecated paths, sensitive names
   modules/<slug>.md          one page per logical Lambda group (3–8 groups)
@@ -38,7 +38,7 @@ AGENTS.md                    wiki pointer block appended for other agents
 
 ```
 skills/repo-llm-wiki/
-  SKILL.md          dispatch, git policy, profile validation
+  SKILL.md          dispatch and git policy
   init.md           full init procedure
   refresh.md        regen procedure (delegates to init.md §1–4)
   lint.md           E1–E6 errors, W1–W4 warnings
@@ -47,12 +47,3 @@ skills/repo-llm-wiki/
       index.md.tmpl
       log.md.tmpl
 ```
-
-## Roadmap
-
-| Phase | Scope |
-|---|---|
-| 1 (current) | Snapshot wiki from repo state |
-| 2 | Living wiki updated from PRs and commits |
-| 3 | Jira + Confluence integration |
-| 4 | Wiki-of-wikis across multiple repos |
