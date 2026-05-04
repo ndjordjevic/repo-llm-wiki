@@ -2,8 +2,6 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-If a profile arg was passed (`/repo-llm-wiki refresh iac-aws`), set `PROFILE_OVERRIDE = iac-aws`. Valid values: `iac-aws`, `generic`. If invalid, stop with the SKILL.md usage block.
-
 `refresh` is one-shot regeneration. Phase 1 does not attempt incremental updates — every page is regenerated. The only difference from `init` is the guard direction and the log entry behaviour.
 
 ---
@@ -28,7 +26,7 @@ Print: *"Refreshing wiki from current HEAD..."*
 
 1. **Capture prior log SHA.** Before writing anything, parse the SHA from the most recent `## ` entry in `wiki/log.md`. Store as `PRIOR_SHA`. If `wiki/log.md` is missing or unparseable, `PRIOR_SHA = unknown`.
 
-2. **Run Steps 1 and 2 from `init.md`** — repo data collection (§1.1–§1.9) and profile detection (§2). Print the detected profile.
+2. **Run Step 1 from `init.md`** — repo data collection (§1.1–§1.9).
 
 3. **Compute staleness for index page**:
    ```bash
@@ -36,7 +34,7 @@ Print: *"Refreshing wiki from current HEAD..."*
    ```
    If the call fails (PRIOR_SHA unknown or invalid), set `COMMITS_AHEAD = 0` and proceed.
 
-4. **Regenerate every wiki page** in the order specified in `init.md` §4.1–§4.9. **Overwrite** existing pages (do not merge prose). The skip conditions documented in `init.md` apply identically (e.g. skip `wiki/infra.md` if `PROFILE != "iac-aws"`).
+4. **Regenerate every wiki page** in the order specified in `init.md` §3.1–§3.9. **Overwrite** existing pages (do not merge prose). The skip conditions documented in `init.md` apply identically (e.g. skip `wiki/infra.md` if no Terraform files found).
 
    Two exceptions:
    - **`wiki/log.md`** — do **not** overwrite. Prepend a new entry at the top (after the `# Generation log` heading and intro paragraph). The new entry uses the template substitutions from `init.md` §4.8 with `{{COMMAND}}` = `refresh`. Existing entries below are preserved verbatim.
@@ -57,7 +55,6 @@ Wiki refreshed (<PAGES_WRITTEN_COUNT> pages)
 
   <list of pages actually written this run>
 
-Profile: <PROFILE> [<FLAVOR>]
 SHA: <REPO_SHA[0:7]>  Branch: <REPO_BRANCH>
 Previous SHA: <PRIOR_SHA[0:7]>  (<COMMITS_AHEAD> commits since)
 

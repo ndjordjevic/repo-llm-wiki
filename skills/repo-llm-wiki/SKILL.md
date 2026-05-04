@@ -52,7 +52,7 @@ a healthy, queryable knowledge base
 
 | Command | Status |
 |---|---|
-| `init [profile]` | Phase 1 |
+| `init` | Phase 1 |
 | `refresh` | Phase 1 |
 | `lint` | Phase 1 |
 
@@ -69,15 +69,14 @@ This skill is plain Markdown instructions. The "agent" referenced throughout is 
 ## Dispatch
 
 1. Identify the subcommand from the invocation args (the first word after `/repo-llm-wiki`).
-2. An optional second arg is a profile override (e.g. `init iac-aws`). Valid values: `iac-aws`, `generic`. Anything else → reject with the usage block below.
-3. Route — read the sibling file in this skill directory and follow its instructions exactly:
+2. Route — read the sibling file in this skill directory and follow its instructions exactly:
    - **`init`** → `init.md`
    - **`refresh`** → `refresh.md`
    - **`lint`** → `lint.md`
 4. If the subcommand is missing or unrecognised, print and stop:
    ```
    Usage: /repo-llm-wiki <subcommand>
-     init [profile]   — scaffold and generate a new wiki
+     init             — scaffold and generate a new wiki
      refresh          — regenerate wiki from current HEAD
      lint             — validate wiki health
    ```

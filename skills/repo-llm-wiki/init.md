@@ -2,8 +2,6 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-If a profile arg was passed (`/repo-llm-wiki init iac-aws`), set `PROFILE_OVERRIDE = iac-aws`. Valid values: `iac-aws`, `generic`. If invalid, stop with the SKILL.md usage block.
-
 ---
 
 ## Guards (run all three before any work)
@@ -146,38 +144,7 @@ Read in full (≤500 lines; for larger files read first 200 lines):
 
 ---
 
-## Step 2 — Detect profile
-
-Print: *"Detecting profile..."*
-
-If `PROFILE_OVERRIDE` was set, use it. Otherwise, evaluate in order; **first match wins**:
-
-```
-if AWS_RESOURCE_TYPES non-empty OR ENV_FILES non-empty:
-    PROFILE = "iac-aws"
-    if LAMBDA_DIRS non-empty AND GO_VERSION set:    FLAVOR = "go-lambda-monorepo"
-    elif LAMBDA_DIRS non-empty AND NODE_VERSION set: FLAVOR = "node-lambda-monorepo"
-    else: FLAVOR = ""
-elif GO_VERSION set:
-    PROFILE = "generic"     # labelled go-service internally
-elif NODE_VERSION set AND package.json mentions react|vue|svelte|next|nuxt:
-    PROFILE = "generic"     # labelled frontend-app internally
-elif NODE_VERSION set:
-    PROFILE = "generic"     # labelled node-service internally
-else:
-    PROFILE = "generic"
-```
-
-Phase 1 only renders two profiles distinctly: `iac-aws` and `generic`.
-
-Print:
-```
-Detected profile: <PROFILE> [<FLAVOR>]
-```
-
----
-
-## Step 3 — Create directories
+## Step 2 — Create directories
 
 ```bash
 mkdir -p wiki wiki/modules wiki/.archive
@@ -185,7 +152,7 @@ mkdir -p wiki wiki/modules wiki/.archive
 
 ---
 
-## Step 4 — Generate pages in order
+## Step 3 — Generate pages in order
 
 Pages are written in this exact order. Later pages reference earlier ones; never reorder.
 
@@ -266,7 +233,7 @@ Goal: produce 3–8 module pages, never one per Lambda.
 
 If after these rules there are >8 groups, merge the two smallest by name similarity until ≤8. If <3 and `CMD_DIRS` is non-empty, keep as-is.
 
-For non-monorepo profiles, "module" means top-level package or service directory in `src/`/`lib/`. For `generic` with no clear modules, write a single `wiki/modules/main.md`.
+For repos without a `cmd/` directory, "module" means top-level package or service directory in `src/`/`lib/`. If no clear module boundaries exist, write a single `wiki/modules/main.md`.
 
 Page slug: kebab-case of the group name (`authorisation-lifecycle`, `migration-pipeline`).
 
@@ -303,9 +270,7 @@ Page slug: kebab-case of the group name (`authorisation-lifecycle`, `migration-p
 
 ### 4.4 `wiki/infra.md`
 
-**Skip this page if `PROFILE != "iac-aws"`.** Print: `skipped: wiki/infra.md (profile is generic)` and continue.
-
-For `iac-aws`:
+**Skip this page if `AWS_RESOURCE_TYPES` is empty** (i.e. no `*.tf` files found in §1.6). Print: `skipped: wiki/infra.md (no Terraform files found)` and continue.
 ```markdown
 # Infrastructure
 
@@ -428,7 +393,6 @@ Read `<skill-dir>/templates/wiki/log.md.tmpl`. Substitute:
 - `{{COMMAND}}` → `init`
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{BRANCH}}` → `REPO_BRANCH`
-- `{{PROFILE}}` → `<PROFILE> [(<FLAVOR>)]` (omit flavor parens if empty)
 - `{{PAGE_COUNT}}` → write the placeholder `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` (recursively), then `sed -i` (or equivalent) to replace `__PAGE_COUNT__` with the final number in `wiki/log.md`. This ensures log and completion summary agree.
 - `{{TOOL_VERSION}}` → `0.1.0` (from SKILL.md frontmatter)
 
@@ -475,7 +439,7 @@ Never replace or rewrite an existing `AGENTS.md`.
 
 ---
 
-## Step 5 — Print completion summary
+## Step 4 — Print completion summary
 
 ```
 Wiki generated in wiki/ (<PAGES_WRITTEN_COUNT> pages)
@@ -491,7 +455,6 @@ Wiki generated in wiki/ (<PAGES_WRITTEN_COUNT> pages)
   wiki/log.md
   AGENTS.md              ← extended with wiki block
 
-Profile: <PROFILE> [<FLAVOR>]
 SHA: <REPO_SHA[0:7]>  Branch: <REPO_BRANCH>
 
 Next: review wiki/index.md, then commit wiki/ to git.

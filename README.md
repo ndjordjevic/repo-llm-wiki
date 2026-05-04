@@ -32,16 +32,7 @@ AGENTS.md                    wiki pointer block appended for other agents
 | `/repo-llm-wiki refresh` | Regenerate all pages from HEAD. Requires an existing wiki. |
 | `/repo-llm-wiki lint` | Validate wiki health: broken wikilinks, stale citations, missing log entries. |
 
-All three accept an optional profile override: `/repo-llm-wiki init iac-aws`.
-
-## Profiles
-
-| Profile | Detected when |
-|---|---|
-| `iac-aws` | `*.tf` files present in `infra/` |
-| `generic` | everything else |
-
-Profile controls whether `infra.md` is generated and whether the module-grouping algorithm uses Lambda directories.
+`infra.md` is generated automatically when Terraform files are found in `infra/` — no configuration needed.
 
 ## Skill layout
 
