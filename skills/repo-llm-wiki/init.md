@@ -74,19 +74,21 @@ Search candidate paths in order; **first match wins**. If none exist, leave `unk
 ### 1.5 Entry points
 
 ```bash
-find ./app/cmd ./cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort   # → LAMBDA_DIRS
+find ./app/cmd ./cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort   # → CMD_DIRS
 ```
 
-`LAMBDA_COUNT` = line count of the above.
-
-If `LAMBDA_DIRS` is non-empty, also collect imports for grouping:
-
-For each `<dir>` in `LAMBDA_DIRS`:
+For each `<dir>` in `CMD_DIRS`:
 - Read `<dir>/main.go` (or, if absent, the first `*.go` in the dir), capped at 200 lines.
-- Extract import lines matching `internal/(handler|service|repository)/[^"]*`.
-- Store as `LAMBDA_IMPORTS[<dir>]`.
+- If the file contains `aws-lambda-go` import or `lambda.Start` call → classify as **Lambda**, add to `LAMBDA_DIRS`.
+- Otherwise → classify as **CLI tool**, add to `CLI_DIRS`.
+- Extract import lines matching `internal/(handler|service|repository)/[^"]*` and store as `CMD_IMPORTS[<dir>]` (used for module grouping regardless of Lambda vs CLI).
 
-This is bounded: 50 Lambdas × 200 lines = ~10k lines, comparable to one large source file.
+`LAMBDA_COUNT` = count of `LAMBDA_DIRS`.  
+`CLI_COUNT` = count of `CLI_DIRS`.
+
+**Do not use `CMD_DIRS` count as `LAMBDA_COUNT`** — not every binary under `cmd/` is an AWS Lambda function. CLI tools, migration runners, and test helpers live alongside Lambdas in `cmd/` and must be labelled correctly.
+
+This is bounded: ~50 dirs × 200 lines = ~10k lines, comparable to one large source file.
 
 ### 1.6 Infrastructure inventory
 
@@ -257,12 +259,12 @@ A record of a customer's consent for a Data Holder to share specified data with 
 
 Goal: produce 3–8 module pages, never one per Lambda.
 
-1. **By shared internal package.** Cluster `LAMBDA_DIRS` whose `LAMBDA_IMPORTS` share their primary `internal/service/<X>` (or `internal/handler/<X>`) import. Group name = `<X>`.
-2. **By name prefix.** For Lambdas not yet grouped, group by longest common prefix ≥3 chars (e.g. `migrationProcessing`, `migrationInitiation`, `migrationValidation` → `migration`).
-3. **`_old`/`_v1` suffix items.** If a deprecated-suffix Lambda has a peer with the matching root name, group with that peer and mark the group as containing deprecated members. If no peer exists, group with the closest prefix match from rule 2; if no prefix match either, treat as a singleton.
+1. **By shared internal package.** Cluster `CMD_DIRS` whose `CMD_IMPORTS` share their primary `internal/service/<X>` (or `internal/handler/<X>`) import. Group name = `<X>`.
+2. **By name prefix.** For entries not yet grouped, group by longest common prefix ≥3 chars (e.g. `migrationProcessing`, `migrationInitiation`, `migrationValidation` → `migration`).
+3. **`_old`/`_v1` suffix items.** If a deprecated-suffix entry has a peer with the matching root name, group with that peer and mark the group as containing deprecated members. If no peer exists, group with the closest prefix match from rule 2; if no prefix match either, treat as a singleton.
 4. **Singletons** become their own group.
 
-If after these rules there are >8 groups, merge the two smallest by name similarity until ≤8. If <3 and `LAMBDA_DIRS` is non-empty, keep as-is.
+If after these rules there are >8 groups, merge the two smallest by name similarity until ≤8. If <3 and `CMD_DIRS` is non-empty, keep as-is.
 
 For non-monorepo profiles, "module" means top-level package or service directory in `src/`/`lib/`. For `generic` with no clear modules, write a single `wiki/modules/main.md`.
 
@@ -278,10 +280,11 @@ Page slug: kebab-case of the group name (`authorisation-lifecycle`, `migration-p
 <1 paragraph: what this group does, with at least one citation>
 
 ## Members
-| Lambda / file | Source | Deprecated |
-|---|---|---|
-| createAuthorisation | [app/cmd/createAuthorisation/](../../app/cmd/createAuthorisation/) | |
-| ... | ... | ✓ (if applicable) |
+| Entry | Type | Source | Deprecated |
+|---|---|---|---|
+| createAuthorisation | Lambda | [app/cmd/createAuthorisation/](../../app/cmd/createAuthorisation/) | |
+| migrationVerification | CLI tool | [app/cmd/migrationverification/](../../app/cmd/migrationverification/) | |
+| ... | ... | ... | ✓ (if applicable) |
 
 ## Key files
 - [app/internal/handler/authorisation/handler.go](../../app/internal/handler/authorisation/handler.go) — purpose
@@ -328,11 +331,13 @@ All counts and names come from §1 computed data. The agent's job is structure a
 
 Extract from README (Setup / Testing / Deployment sections) and `build.sh` (or Makefile).
 
+**Version sourcing rule**: tool/runtime versions in `## Prerequisites` come **exclusively** from §1 computed variables (`GO_VERSION`, `NODE_VERSION`, `TF_VERSION`, `AWS_PROVIDER_VERSION`). Never copy version numbers from README prose — README text drifts from `go.mod`/`terraform.tf` and that staleness is the #1 failure mode this skill exists to beat. Phrase as exact version (e.g. "Go 1.24.0") not "or later".
+
 ```markdown
 # Runbook
 
 ## Prerequisites
-<from README; cite section>
+<list tools with versions from §1 variables; cite the manifest file (e.g. ../app/go.mod), not the README>
 
 ## Local setup
 <command block from README>
@@ -408,7 +413,7 @@ Mermaid rules: max 10 nodes; only components with evidence in this repo; every a
 | Runtime | <GO_VERSION or NODE_VERSION> |
 | Infrastructure | <Terraform <TF_VERSION>, AWS provider <AWS_PROVIDER_VERSION>, ...> |
 | Persistence | <inferred from AWS_RESOURCE_TYPES> |
-| Compute | <Lambda / EC2 / Fargate, from AWS_RESOURCE_TYPES> |
+| Compute | <AWS Lambda (<N> functions) — use `aws_lambda_function` count from AWS_RESOURCE_TYPES as the authoritative Lambda count, not the total number of cmd/ directories (which also includes CLI tools and migration scripts)> |
 
 ## Where to go next
 - [[architecture]]
