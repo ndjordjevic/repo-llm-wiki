@@ -24,7 +24,12 @@ If anything other than `true`, **stop**:
 
 Print: *"Refreshing wiki from current HEAD..."*
 
-1. **Capture prior log SHA.** Parse the SHA from the most recent `## ` entry in `wiki/log.md`. Store as `PRIOR_SHA`. If missing/unparseable, `PRIOR_SHA = unknown`.
+0. **Same-SHA guard.** Capture `REPO_SHA` (`git rev-parse HEAD`). Parse the SHA from the most recent `## ` entry in `wiki/log.md` and store as `PRIOR_SHA`. If `PRIOR_SHA == REPO_SHA` (no commits since last refresh), **stop and print**:
+   > "Wiki is already up to date (SHA: `<PRIOR_SHA[0:7]>`). No commits since last refresh. Nothing to regenerate."
+   
+   Do not regenerate. This prevents non-deterministic subagent output from silently regressing content on an unchanged codebase.
+
+1. **Capture prior log SHA.** (Already done in step 0.) Store as `PRIOR_SHA`.
 
 2. **Snapshot existing pages.** Record the set of every `*.md` file currently under `wiki/` (excluding `log.md` and `.archive/`). Call this `PRIOR_PAGES`. Used in step 5 for orphan cleanup.
 

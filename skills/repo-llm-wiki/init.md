@@ -274,9 +274,9 @@ Cap return ~4k tokens.
 
 Singletons (one script in a group) are allowed but prefer grouping by prefix when ≥3 share one.
 
-### Subagent E — Package introspection (go-library shape only)
+### Subagent E — Package introspection
 
-Skip this subagent unless `REPO_SHAPE == go-library`.
+Skip this subagent unless `PACKAGE_DIRS` is non-empty. (This covers go-library repos and any monorepo that also exports top-level packages.)
 
 **Purpose**: for every entry in `PACKAGE_DIRS`, describe what the package is for, what it exposes, and who would import it.
 
@@ -481,11 +481,11 @@ For deprecated items (`deprecated: true` from Subagent A), prepend `⚠ deprecat
 This repo's AWS infrastructure is defined in Terraform under `infra/`. Environments: <list from Subagent B>.
 
 ## Resources
-| Type | Count | Examples |
-|---|---|---|
-| aws_lambda_function | 42 | create_authorisation, amend_arrangement, … |
-| aws_dynamodb_table | 1 | authorisations |
-| ... | | |
+| Type | Count | Examples | Purpose |
+|---|---|---|---|
+| aws_lambda_function | 42 | create_authorisation, amend_arrangement, … | Compute for the authorisation API and scheduled jobs |
+| aws_dynamodb_table | 1 | authorisations | Single-table store for authorisation records |
+| ... | | | |
 
 ## DynamoDB
 Single table `authorisations` with the following Global Secondary Indexes: <list>.
