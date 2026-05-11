@@ -2,11 +2,19 @@
 
 > Companion to `phase-1-prd.md`. Covers *how* the skill is built: file layout, step-by-step agent instructions, generation order, token strategy, and lint rules.
 
-Status: draft 2 · Date: 2026-05-02
+Status: draft 3 · Date: 2026-05-11
+
+> **Draft-3 supersession notice.** After running v0.1 on the validation repo the output was rejected as too heavy (architecture/repo-map/glossary pages, broken file-link citations in Obsidian, mermaid diagrams nobody could read, lambdas lumped into module clusters). v0.2 pivots to a **drill-down** wiki: `index.md` → category page → per-item flow narrative. The **authoritative source of the v0.2 instructions is `skills/repo-llm-wiki/{init,refresh,lint}.md`** — the SKILL files are now canonical and have been rewritten end-to-end.
+>
+> This document keeps the v0.1 detail for historical context and to preserve the parts of the design that carry through unchanged (repo data collection in §3, profile-detection ideas in §4). The page-generation sections (§5.x) describe the old layout and are **superseded** wholesale — read `init.md` instead.
+>
+> Carries through: §1 skill file layout (same files), §3 data collection (commands unchanged), §2 SKILL.md dispatch (same), git policy (same). Superseded: §4 profile detection (replaced wholesale by category discovery — v0.2 does not classify repos into profiles), §5 page generation, §6 profile-specific emphasis, the mermaid rules in §5.6, the module-grouping algorithm in §5.3, every page contract that references file-link citations.
 
 ## 0. Execution model
 
-The skill is plain Markdown instructions. The "agent" referenced throughout is the **host LLM session** running the skill (Claude Code, Cursor, or Copilot) — there is no external model invocation, no separate process, no orchestration daemon. Phase 1 is single-agent: one session reads instructions, runs shell commands, reads files, and writes pages, in order.
+The skill is plain Markdown instructions. The "agent" referenced throughout is the **host LLM session** running the skill (Claude Code, Cursor, or Copilot) — there is no external model invocation, no separate process, no orchestration daemon.
+
+**v0.2 is multi-agent for analysis, single-writer for pages.** The main session runs the cheap deterministic shell pass (§3 below) and the page-writing pass. Between those, it fans out to **four subagents in parallel** that do the expensive work: enumerate `cmd/` and produce flow narratives, enumerate Terraform resources, group scripts, draft the overview paragraph. Subagent prompts are self-contained; their returns are short structured payloads. See `init.md` Step 2 for the contracts. Hosts without a subagent primitive fall back to inline analysis — same output, slower, noisier main context.
 
 ---
 
@@ -37,7 +45,7 @@ No config file is generated in the repo. All defaults are embedded here.
 ```yaml
 name: repo-llm-wiki
 description: "Generates a committable Markdown wiki from the repo it lives in — invoke with /repo-llm-wiki"
-version: "0.1.0"
+version: "0.2.0"
 trigger: "/repo-llm-wiki"
 compatible_agents:
   tested: [claude]
@@ -216,7 +224,24 @@ Detected profile: iac-aws (go-lambda-monorepo)
 
 ## 5. Page generation sequence
 
-Pages are written in this order. **Never reorder**: later pages synthesize earlier ones.
+> **SUPERSEDED by v0.2.** The table and subsections below describe the v0.1 page set (repo-map, glossary, modules, architecture, overview, runbook). v0.2 generates: `index.md`, `lambdas.md` + `lambdas/<name>.md`, `cli.md` + `cli/<name>.md`, `migrations.md` (+ details where warranted), `scripts.md`, `infra.md` (+ `infra/<type>.md` if split), `log.md`. See `skills/repo-llm-wiki/init.md` Step 3 (categories) and Step 5 (page contracts) for authoritative detail. The sections below are kept for reference only — do not implement against them.
+
+### v0.2 page sequence (summary; authoritative version lives in `init.md`)
+
+| # | File | Built from | Subagent? |
+|---|---|---|---|
+| 1 | Category list pages (`lambdas.md`, `cli.md`, `migrations.md`, `scripts.md`) | Subagent A + C returns | A, C |
+| 2 | Per-item detail pages under `lambdas/`, `cli/`, `migrations/` | Subagent A return | A |
+| 3 | `wiki/infra.md` (+ `wiki/infra/<type>.md` if split) | Subagent B return | B |
+| 4 | `wiki/log.md` | template + REPO_SHA, date, page count | — |
+| 5 | `wiki/index.md` | Subagent D overview + emitted categories + tech stack from §3 | D |
+| 6 | `AGENTS.md` | `templates/AGENTS_BLOCK.md` | — |
+
+Order matters because §5 (`index.md`) lists only pages that were actually written, and `log.md`'s page count is back-filled after `index.md`.
+
+---
+
+### v0.1 sequence — superseded (kept below for reference)
 
 | # | File | Input sources | LLM? |
 |---|---|---|---|

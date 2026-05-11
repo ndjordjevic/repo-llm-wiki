@@ -4,6 +4,19 @@
 
 ---
 
+## Design intent (read first)
+
+The wiki is **small and drill-down**. From `index.md` a reader picks a category (e.g. *Lambdas*), reaches a category page listing items, clicks an item and lands on a short page describing *what that thing does* — a 2-minute read, no source-file links, just a flow narrative.
+
+Hard rules that shape every step below:
+
+- **Only `[[wikilinks]]` between wiki pages.** No relative paths to source files (`../app/cmd/...`). Obsidian opens `wiki/` as the vault root and source-file paths resolve to nothing; that's why we drop them.
+- **Categories are discovered, not fixed.** A repo with no Terraform has no infrastructure section. A repo with no `cmd/` has no lambdas section. Never emit empty sections.
+- **One starting page only: `index.md`.** No separate `overview.md`, `architecture.md`, `repo-map.md`, or `glossary.md`. The overview paragraph lives in `index.md`.
+- **Per-item pages describe a flow, not files.** For a Lambda: who triggers it → what the handler does → what the service does → where data lands → response. 3–6 sentences. No file paths.
+
+---
+
 ## Guards (run all three before any work)
 
 **Guard A** — if `wiki/index.md` already exists in the current working directory, **stop**:
@@ -21,11 +34,11 @@ If this returns anything other than `true`, **stop**:
 
 ---
 
-## Step 1 — Collect repo data
+## Step 1 — Repo identity and inventory (single agent, fast)
 
 Print: *"Collecting repo data..."*
 
-Run all of the following. Hold results in memory under the variable names shown. **Skip a sub-step if its inputs don't exist; never error.** When a variable has no source, leave it `unknown` (versions) or empty (lists).
+Run these directly. They are cheap and deterministic. Hold results in memory.
 
 ### 1.1 Identity
 
@@ -41,9 +54,7 @@ basename "$(git rev-parse --show-toplevel)" # → REPO_NAME
 find . -maxdepth 1 -not -name '.' -not -path '*/.git' | sort   # → ROOT_ENTRIES
 ```
 
-For each entry, classify per the table in §2.6 of this file (repo-map page).
-
-### 1.3 Directory tree (3 levels)
+### 1.3 Directory tree (3 levels, for subagent context)
 
 ```bash
 find . -type d -maxdepth 3 \
@@ -52,419 +63,381 @@ find . -type d -maxdepth 3 \
   -not -path '*/vendor/*' \
   -not -path '*/dist/*' \
   -not -path '*/build/*' \
+  -not -path '*/archive/*' \
   | sort
 # → DIR_TREE
 ```
 
-### 1.4 Language and runtime versions
+### 1.4 Runtime versions (authoritative source, never from README)
 
-Search candidate paths in order; **first match wins**. If none exist, leave `unknown`.
+Search candidate paths in order; **first match wins**. Leave `unknown` if no source exists.
 
-| Variable | Candidate paths | What to extract |
+| Variable | Candidate paths | Extract |
 |---|---|---|
 | `GO_VERSION`, `MODULE_NAME` | `go.mod`, `app/go.mod`, `service/go.mod` | `^go (\S+)` and `^module (\S+)` |
 | `NODE_VERSION`, `NPM_NAME` | `package.json`, `app/package.json` | `.engines.node`, `.name` |
 | `TF_VERSION` | `infra/terraform.tf`, `terraform.tf`, `infra/versions.tf`, `versions.tf` | `required_version = "..."` |
-| `AWS_PROVIDER_VERSION` | same files as TF_VERSION | first `aws { ... version = "..." }` block under `required_providers` |
+| `AWS_PROVIDER_VERSION` | same as TF_VERSION | first `aws { ... version = "..." }` under `required_providers` |
 
-**Never** read these from README prose. Always from the source manifest.
-
-### 1.5 Entry points
+### 1.5 cmd/ entry-point enumeration
 
 ```bash
 find ./app/cmd ./cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort   # → CMD_DIRS
 ```
 
-For each `<dir>` in `CMD_DIRS`:
-- Read `<dir>/main.go` (or, if absent, the first `*.go` in the dir), capped at 200 lines.
-- If the file contains `aws-lambda-go` import or `lambda.Start` call → classify as **Lambda**, add to `LAMBDA_DIRS`.
-- Otherwise → classify as **CLI tool**, add to `CLI_DIRS`.
-- Extract import lines matching `internal/(handler|service|repository)/[^"]*` and store as `CMD_IMPORTS[<dir>]` (used for module grouping regardless of Lambda vs CLI).
-
-`LAMBDA_COUNT` = count of `LAMBDA_DIRS`.  
-`CLI_COUNT` = count of `CLI_DIRS`.
-
-**Do not use `CMD_DIRS` count as `LAMBDA_COUNT`** — not every binary under `cmd/` is an AWS Lambda function. CLI tools, migration runners, and test helpers live alongside Lambdas in `cmd/` and must be labelled correctly.
-
-This is bounded: ~50 dirs × 200 lines = ~10k lines, comparable to one large source file.
-
-### 1.6 Infrastructure inventory
+### 1.6 Infrastructure enumeration
 
 ```bash
-# Environments
-find infra/environments -type f -name '*.tfvars' 2>/dev/null | sort
-# → ENV_FILES
-
-# AWS resource types
-grep -rh "^resource \"aws_" infra/*.tf 2>/dev/null | grep -oE '"aws_[^"]+"' | sort -u
-# → AWS_RESOURCE_TYPES
-
-# GSI names — match conventional naming directly
-grep -hoE '"GSI_[A-Za-z0-9_]+"' infra/*.tf 2>/dev/null | sort -u
-# → GSI_NAMES
-# Fallback if zero results: read dynamodb.tf and grep `name\s*=\s*"[^"]+"` lines that
-# appear inside `global_secondary_indexes` / `global_secondary_index` blocks.
+find infra -maxdepth 1 -name '*.tf' 2>/dev/null | sort                                          # → TF_FILES
+grep -rh "^resource \"aws_" infra/*.tf 2>/dev/null | grep -oE '"aws_[^"]+"' | sort | uniq -c    # → AWS_RESOURCE_COUNTS
+find infra/environments -type f -name '*.tfvars' 2>/dev/null | sort                             # → ENV_FILES
 ```
 
-### 1.7 Workflows and CI
+`AWS_RESOURCE_TOTAL` = sum of counts in `AWS_RESOURCE_COUNTS`. Used for the infra-splitting decision in §3.
+
+### 1.7 Scripts
 
 ```bash
-ls .github/workflows/ 2>/dev/null | grep -E '\.ya?ml$' | sort   # → WORKFLOW_FILES
+find . -maxdepth 1 -name '*.sh' -type f | sort                          # → ROOT_SCRIPTS
+test -f Makefile && echo Makefile                                       # → HAS_MAKEFILE
 ```
 
-The `.yml`/`.yaml` filter excludes README and other non-workflow files that may live alongside.
-
-### 1.8 Test suites
+### 1.8 Workflows and tests
 
 ```bash
-find tests -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort   # → TEST_SUITES
+ls .github/workflows/ 2>/dev/null | grep -E '\.ya?ml$' | sort           # → WORKFLOW_FILES
+find tests -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort           # → TEST_SUITES
 ```
 
-### 1.9 Read key source files
+### 1.9 Skip lists (do not read)
 
-Read in full (≤500 lines; for larger files read first 200 lines):
-
-- `README.md`
-- `app/internal/model/domain.go` (if exists) — domain types
-- `app/internal/model/model.gen.go` (if exists) — note as generated; extract type names only
-- `infra/dynamodb.tf` (if exists)
-- `infra/lambda.tf` (first 200 lines, for Lambda function names)
-- `infra/swaggers/*.yaml` or `*.json` (first 100 lines — paths and tags only)
-- `.github/workflows/main.yml` first; if absent, the alphabetically first `wf-*.yml`
-- `build.sh` or equivalent root build script (Makefile, `scripts/build`)
-
-**Skip entirely** (do not read):
-- `archive/` and `*_old*/` dirs (note they exist in repo-map only)
-- `dist/`, `build/` dirs
-- `*.csv`, `*.json` data files at root
+- `archive/`, `**/*_old*/`, `dist/`, `build/`, `vendor/`, `node_modules/`
+- `*.csv`, `*.xlsx`, `*.xls`, `*.sql`, `*.dump`, `*.sum`, `*.lock`, `*.tfstate`
 - `*_test.go`, `*.test.ts`
-- `vendor/`, `node_modules/`
-- `*.sum`, `*.lock`, `*.tfstate`, binaries
-- Files >1000 lines that aren't a key source file listed above
+- Files larger than 1000 lines unless explicitly listed by a subagent task below
 
 ---
 
-## Step 2 — Create directories
+## Step 2 — Deep analysis (subagents in parallel)
+
+Token-spend warning: the goal is to fan out so the main agent's context stays clean. Spawn the four subagents below **in a single message** (parallel) using the `Agent` tool with `subagent_type=general-purpose`. Wait for all to return before proceeding.
+
+Each subagent prompt must be self-contained: it has no view of this conversation. Include `DIR_TREE`, the relevant lists from §1, and the exact return format.
+
+### Subagent A — cmd/ flow narratives
+
+**Sub-batching rule (run before spawning).** If `len(CMD_DIRS) > 20`, shard `CMD_DIRS` into batches of at most 15 entries each (sorted alphabetically) and spawn one Subagent A instance per shard, in parallel. This keeps each subagent's input bounded (~15 dirs × 3 files × 200 lines = ~9k lines) and protects against truncation on large repos. The main agent merges all shards' returns before §3. If `len(CMD_DIRS) ≤ 20`, run as a single subagent.
+
+**Purpose**: for every entry in the assigned `CMD_DIRS` shard, classify it (Lambda / CLI tool / migration script / other) and produce a 3–6 sentence flow narrative.
+
+**Per-entry investigation** (cap reads at 200 lines each):
+1. Read `<dir>/main.go` (or first `*.go`).
+2. Classify: contains `aws-lambda-go` import or `lambda.Start(` call → **Lambda**. Otherwise → **CLI tool** (or **Migration script** if name matches `migration*`, `*Migration*`, `pfb*`, `basiq*`).
+3. From the imports in main.go, identify the primary `internal/handler/<X>` and `internal/service/<Y>` packages used.
+4. Read **one** handler file under that handler package and **one** service file under that service package (first `*.go` not ending `_test.go`), capped at 200 lines.
+5. Note what the service does at a high level (writes to DynamoDB? calls another service? publishes to SQS? returns data?).
+
+**Per-entry return** (one JSON-ish object):
+```
+{
+  "name": "amendArrangement",
+  "type": "Lambda",
+  "deprecated": false,           // true if dir name ends _old / _v1 / _legacy
+  "trigger": "API Gateway",      // or "EventBridge schedule", "SQS message", "CLI invocation", "unknown"
+  "flow": "Triggered by API Gateway. The handler parses and validates the amend-arrangement request, then calls the authorisation service which updates the existing arrangement record in DynamoDB. Returns the updated arrangement to the caller.",
+  "category_hint": "lambdas"     // one of: lambdas, cli, migration
+}
+```
+
+**Trigger inference rules** (subagent applies, in order):
+- `aws-lambda-go/events.APIGatewayProxyRequest` in handler → `API Gateway`
+- `events.CloudWatchEvent` / `events.EventBridgeEvent` → `EventBridge schedule`
+- `events.SQSEvent` → `SQS message`
+- `events.DynamoDBEvent` → `DynamoDB Streams`
+- `events.S3Event` → `S3`
+- Non-Lambda with `main()` parsing flags → `CLI invocation`
+- Otherwise → `unknown`
+
+**Return**: a single Markdown section per entry, plus a final summary table. Cap total return to ~6k tokens.
+
+### Subagent B — Terraform resource inventory
+
+**Purpose**: for each AWS resource type used in `infra/*.tf`, return type, count, up to 3 example resource names, and one-sentence purpose inferred from naming + the `.tf` file it lives in. Also identify GSI names from any `global_secondary_index` blocks (read `infra/dynamodb.tf` if present) and list environment files from `ENV_FILES`.
+
+Inputs to pass: `TF_FILES`, `AWS_RESOURCE_COUNTS`, `ENV_FILES`.
+
+**Return shape**:
+```
+{
+  "resources_by_type": [
+    {"type": "aws_lambda_function", "count": 42, "examples": ["create_authorisation","amend_arrangement","..."], "purpose": "Compute for the authorisation API and scheduled jobs"},
+    {"type": "aws_dynamodb_table", "count": 1, "examples": ["authorisations"], "purpose": "Single-table store for authorisation records"},
+    ...
+  ],
+  "dynamodb_gsis": ["GSI_CustomerAuthorisations", "GSI_ArrangementAuthorisations", ...],
+  "environments": ["dev","sit","prod", ...]
+}
+```
+
+Cap return ~4k tokens.
+
+### Subagent C — Scripts grouping
+
+**Purpose**: read each script in `ROOT_SCRIPTS` (first 50 lines is enough) and the Makefile if present. Group by name prefix (e.g. all `build-*.sh` together) and by purpose. For each group, write 1–2 sentences describing what the group does and list the scripts in it.
+
+**Return shape**:
+```
+{
+  "groups": [
+    {"name": "Build scripts", "purpose": "Cross-compile Go Lambdas into deployment zips.", "scripts": ["build.sh","build-apimetrics.sh","build-dbconsentsummary.sh", ...]},
+    {"name": "Data-tooling scripts", "purpose": "Run one-off data cleanups against DynamoDB.", "scripts": ["delete-dataholder.sh","list-dataholders.sh"]},
+    ...
+  ]
+}
+```
+
+Singletons (one script in a group) are allowed but prefer grouping by prefix when ≥3 share one.
+
+### Subagent D — Repo purpose paragraph
+
+**Purpose**: write the 3–5 sentence overview paragraph that goes at the top of `index.md`. **Do not** take `README.md` at face value — it may be stale. Read:
+- `README.md` (full, up to 500 lines)
+- Names of all entries in `CMD_DIRS` (passed as input)
+- `DIR_TREE` (passed as input)
+- The top of one representative service file (first 100 lines), chosen by Subagent D from internal/service/.
+- Up to 3 swagger/openapi files under `infra/swaggers/` (first 50 lines each) if they exist.
+
+Synthesize what the repo actually *does* in plain language. Identify the domain (e.g. "Open-banking data-sharing authorisations under the Australian CDR regime"). State the deployment shape briefly (e.g. "Deployed as AWS Lambdas behind API Gateway, with DynamoDB as the system of record"). Do not invent capabilities; if uncertain, say so with `Confidence: low`.
+
+**Return**: 3–5 sentences of prose, ready to drop into `index.md`. No headings, no citations, no wikilinks.
+
+---
+
+## Step 3 — Decide page layout (main agent)
+
+After subagents return, the main agent decides which pages to emit. **Emit no empty sections, no empty pages.**
+
+### 3.1 Categories present
+
+For each of the following, emit the category only if there is non-zero content:
+
+| Category | Page | Condition |
+|---|---|---|
+| Lambdas | `wiki/lambdas.md` + `wiki/lambdas/<slug>.md` per item | at least one Subagent A item with `type=Lambda` |
+| CLI tools | `wiki/cli.md` + `wiki/cli/<slug>.md` per item | at least one with `type=CLI tool` |
+| Migration scripts | `wiki/migrations.md` + `wiki/migrations/<slug>.md` per item | at least one with `type=Migration script`. **Group instead of per-item page** if ≥6 items share the same name prefix and similar flow — list them on the category page with a one-line description each; no detail pages. |
+| Build / utility scripts | `wiki/scripts.md` | Subagent C returned at least one group |
+| Infrastructure | see §3.2 | `AWS_RESOURCE_TOTAL > 0` |
+| Workflows | one line per file inside `wiki/scripts.md` under a `## CI workflows` heading | `WORKFLOW_FILES` non-empty |
+| Tests | one paragraph inside `index.md` under a `## Tests` heading | `TEST_SUITES` non-empty |
+
+### 3.2 Infrastructure split rule
+
+- If `AWS_RESOURCE_TOTAL ≤ 15` **or** there are ≤ 3 distinct resource types → emit a single `wiki/infra.md`.
+- Otherwise → emit `wiki/infra.md` as a list of resource types (one per row, linking to a detail page) and emit `wiki/infra/<resource-type-slug>.md` for each type with **count ≥ 3**. Types with fewer than 3 resources are listed on `wiki/infra.md` directly without a detail page.
+
+Slug rule for resource-type pages: strip `aws_` prefix and pluralise simply (`aws_lambda_function` → `lambdas`, `aws_dynamodb_table` → `dynamodb-tables`, `aws_s3_bucket` → `s3-buckets`). If a slug collides with a top-level category (`lambdas` for `aws_lambda_function`), prefix with `infra-` (→ `infra/infra-lambdas.md`) or, equivalently, keep it under `infra/` and the parent folder already disambiguates — use the latter (no prefix needed when nested under `infra/`).
+
+---
+
+## Step 4 — Create directories
 
 ```bash
-mkdir -p wiki wiki/modules wiki/.archive
+mkdir -p wiki
+# Create sub-directories only when their category will be emitted:
+#   mkdir -p wiki/lambdas
+#   mkdir -p wiki/cli
+#   mkdir -p wiki/migrations
+#   mkdir -p wiki/infra
 ```
 
 ---
 
-## Step 3 — Generate pages in order
+## Step 5 — Write pages
 
-Pages are written in this exact order. Later pages reference earlier ones; never reorder.
+For each page below, after writing it print: `wrote: wiki/<path>`. Skipped: `skipped: wiki/<path> (<reason>)`. Track `PAGES_WRITTEN_COUNT`.
 
-For each page below, after writing it print: `wrote: wiki/<path>`. If a page is skipped, print: `skipped: wiki/<path> (<reason>)`. Track `PAGES_WRITTEN_COUNT`.
+### 5.1 Category list pages
 
-### 4.1 `wiki/repo-map.md`
+For each emitted category, write its list page from the subagent return.
 
-Purpose: honest, warts-and-all map of the repo. Built almost entirely from computed data.
+**`wiki/lambdas.md`** (template):
+```markdown
+# Lambdas
 
-Render the directory tree from `DIR_TREE` as an indented Markdown list (3 levels max, sorted, one entry per line, indent by depth).
+This repo deploys <N> AWS Lambda functions. Click into each for what it does.
 
-**Root-level classification table** — for each entry in `ROOT_ENTRIES`, produce one row:
-
-| Entry pattern | Type | Notes column |
+| Lambda | Trigger | What it does (1 line) |
 |---|---|---|
-| `app/`, `src/`, `lib/`, `cmd/` | `code` | (empty) |
-| `infra/`, `terraform/`, `tf/` | `infra` | (empty) |
-| `tests/`, `test/`, `spec/` | `tests` | (empty) |
-| `docs/`, `wiki/` | `docs` | (empty) |
-| `*.sh`, `build-*.sh`, `Makefile` | `scripts` | filename |
-| `*.csv`, `*.json`, `*.txt`, `*.xlsx`, `*.xls`, `*.sql`, `*.dump` at root | `data` | "⚠ flagged" if name matches sensitive patterns (see callout 3) |
-| `archive/`, `*_old/` | `archive` | "⚠ deprecated" |
-| `dist/`, `build/`, `out/`, `target/` | `build-artifact` | (empty) |
-| `.github/`, `.claude/`, `.cursor/`, `.devcontainer/`, `.idea/`, `.vscode/` | `config` | (empty) |
-| anything else | `unclear` | (empty) |
-
-**Callout blocks** (emit each only when its condition matches):
-
-1. **⚠ Loose files at root** — root-level files that aren't in a standard project directory and aren't standard project metadata (`README*`, `LICENSE*`, `CODEOWNERS`, `.gitignore`, `Makefile`, `*.sh`, `package.json`, `go.mod`, `Dockerfile`, `*.tf`). List each by name. If none, omit the callout.
-
-2. **⚠ Likely deprecated** — any path matching `archive/`, `**/*_old/`, `**/*_old*`, `**/*_v1/`, `**/*_legacy/`. List each. If none, omit.
-
-3. **⚠ Possibly sensitive** — files whose **filename** matches `*customer*`, `*consent*`, `*pii*`, `*personal*`, `*account*`, `*ppid*`, `*identifier*` AND whose **extension** is one of `.csv`, `.json`, `.txt`, `.xlsx`, `.xls`, `.sql`, `.dump`. **Do not read the contents** of these files. Source code files (`.go`, `.py`, `.ts`, …) are never flagged here even if their names match. List each by relative path. If none, omit.
-
-Output structure:
-```markdown
-# Repo Map
-
-> Generated from directory enumeration. Does not represent intended architecture — it shows what's actually here.
-
-## Directory tree
-<rendered DIR_TREE>
-
-## Root-level classification
-<table>
-
-<callouts, in order, only those that fired>
+| [[lambdas/amendArrangement]] | API Gateway | Updates an existing arrangement |
+| [[lambdas/createAuthorisation]] | API Gateway | Writes a new authorisation record |
+| ... | | |
 ```
 
-### 4.2 `wiki/glossary.md`
+The "what it does (1 line)" column is the first sentence of the subagent's flow narrative, truncated to ~80 chars. Sort alphabetically.
 
-Read: README, `app/internal/model/domain.go` (or analogous domain file), API spec paths/tags only.
+**`wiki/cli.md`** and **`wiki/migrations.md`**: same structure, with `Invocation` instead of `Trigger` where appropriate.
 
-**Term selection** — include a term only if:
-1. It's capitalised (proper noun) or a multi-word concept, AND
-2. It appears at least 3 times across the inputs combined, AND
-3. It is one of: a type/struct name in the domain model, a noun in an API path/tag, or explicitly defined in README prose.
-
-Cap at 25 terms (most-cited wins). If fewer than 3 qualify, **skip the page** entirely (do not write a stub) and print: `skipped: wiki/glossary.md (no domain terms identified)`.
-
-For each kept term, write 1–3 sentences with one citation. Format:
+**`wiki/scripts.md`** (template):
 ```markdown
-### Authorisation
-A record of a customer's consent for a Data Holder to share specified data with a Data Recipient.
-([app/internal/model/domain.go](../app/internal/model/domain.go))
+# Scripts
+
+## <Group name from Subagent C>
+<1–2 sentences from Subagent C>
+- `build.sh` — <one-line purpose>
+- `build-apimetrics.sh` — <one-line purpose>
+...
+
+## <Next group>
+...
+
+## CI workflows
+<one line per WORKFLOW_FILES entry: file + inferred purpose>
 ```
 
-### 4.3 `wiki/modules/<slug>.md`
+### 5.2 Per-item detail pages
 
-#### Grouping algorithm (deterministic; apply in order)
+Write `wiki/lambdas/<name>.md` (and equivalents under `cli/`, `migrations/`) for every item that has its own page. **Slug = item name verbatim** (preserve case from `CMD_DIRS`).
 
-Goal: produce 3–8 module pages, never one per Lambda.
+**Hard rule, re-stated for the writer**: the body of a detail page contains **no relative paths to source files**. No `../app/...`, no `[handler.go](../...)`. Refer to handlers and services by their conceptual role ("the handler", "the authorisation service"), not by file path. Lint E2 fails the wiki otherwise. If the subagent's flow narrative contains such a path, strip it before writing.
 
-1. **By shared internal package.** Cluster `CMD_DIRS` whose `CMD_IMPORTS` share their primary `internal/service/<X>` (or `internal/handler/<X>`) import. Group name = `<X>`.
-2. **By name prefix.** For entries not yet grouped, group by longest common prefix ≥3 chars (e.g. `migrationProcessing`, `migrationInitiation`, `migrationValidation` → `migration`).
-3. **`_old`/`_v1` suffix items.** If a deprecated-suffix entry has a peer with the matching root name, group with that peer and mark the group as containing deprecated members. If no peer exists, group with the closest prefix match from rule 2; if no prefix match either, treat as a singleton.
-4. **Singletons** become their own group.
-
-If after these rules there are >8 groups, merge the two smallest by name similarity until ≤8. If <3 and `CMD_DIRS` is non-empty, keep as-is.
-
-For repos without a `cmd/` directory, "module" means top-level package or service directory in `src/`/`lib/`. If no clear module boundaries exist, write a single `wiki/modules/main.md`.
-
-Page slug: kebab-case of the group name (`authorisation-lifecycle`, `migration-pipeline`).
-
-#### What each module page contains
+Format:
 
 ```markdown
-# <Group Name>
+# <Name>
 
-> Confidence: <high|medium|low> — <why>
+> Type: Lambda · Trigger: <trigger>{{ · ⚠ deprecated}}
 
-<1 paragraph: what this group does, with at least one citation>
+<3–6 sentence flow narrative from Subagent A. No file paths. No wikilinks unless they point to other wiki pages.>
 
-## Members
-| Entry | Type | Source | Deprecated |
-|---|---|---|---|
-| createAuthorisation | Lambda | [app/cmd/createAuthorisation/](../../app/cmd/createAuthorisation/) | |
-| migrationVerification | CLI tool | [app/cmd/migrationverification/](../../app/cmd/migrationverification/) | |
-| ... | ... | ... | ✓ (if applicable) |
-
-## Key files
-- [app/internal/handler/authorisation/handler.go](../../app/internal/handler/authorisation/handler.go) — purpose
-- ...
-
-## External dependencies
-| Service | Purpose | Evidence |
-|---|---|---|
-| DynamoDB GSI_CustomerAuthorisations | reads by customer | [infra/dynamodb.tf](../../infra/dynamodb.tf) |
-| SQS authorisation-events | publishes lifecycle events | [infra/sqs.tf](../../infra/sqs.tf) |
-
-## Representative entrypoints read
-- `<lambda1>/main.go`
-- `<lambda2>/main.go`
+## Related
+- [[lambdas]] — full list
+{{- [[infra/dynamodb-tables]] — if the flow mentions DynamoDB and that page exists}}
+{{- [[infra/sqs-queues]] — if the flow mentions SQS and that page exists}}
 ```
 
-### 4.4 `wiki/infra.md`
+The `Related` section should list at most 3 wikilinks, only to pages that actually exist after layout decisions in §3.
 
-**Skip this page if `AWS_RESOURCE_TYPES` is empty** (i.e. no `*.tf` files found in §1.6). Print: `skipped: wiki/infra.md (no Terraform files found)` and continue.
+For deprecated items (`deprecated: true` from Subagent A), prepend `⚠ deprecated · ` to the type line and add one sentence at the end: "This component appears deprecated based on its directory name; verify before relying on it."
+
+### 5.3 Infrastructure pages
+
+**Single-page case (`wiki/infra.md`)**:
 ```markdown
 # Infrastructure
 
-## AWS Resources
-<table from AWS_RESOURCE_TYPES: type | count | example name(s) — at most 3>
+This repo's AWS infrastructure is defined in Terraform under `infra/`. Environments: <list from Subagent B>.
+
+## Resources
+| Type | Count | Examples |
+|---|---|---|
+| aws_lambda_function | 42 | create_authorisation, amend_arrangement, … |
+| aws_dynamodb_table | 1 | authorisations |
+| ... | | |
 
 ## DynamoDB
-<table: table | partition key | GSIs (from GSI_NAMES, all of them, comma-separated)>
+Single table `authorisations` with the following Global Secondary Indexes: <list>.
 
 ## Environments
-<bulleted list from ENV_FILES, one per line>
-
-## Deployment modes
-<extracted from README "Deployment" section if present, else from the orchestrator workflow file>
-
-## IAM and security
-<list any aws_iam_role / aws_security_group resources, citing the .tf file>
+<bulleted list>
 ```
 
-All counts and names come from §1 computed data. The agent's job is structure and prose — **not enumeration**.
-
-### 4.5 `wiki/runbook.md`
-
-Extract from README (Setup / Testing / Deployment sections) and `build.sh` (or Makefile).
-
-**Version sourcing rule**: tool/runtime versions in `## Prerequisites` come **exclusively** from §1 computed variables (`GO_VERSION`, `NODE_VERSION`, `TF_VERSION`, `AWS_PROVIDER_VERSION`). Never copy version numbers from README prose — README text drifts from `go.mod`/`terraform.tf` and that staleness is the #1 failure mode this skill exists to beat. Phrase as exact version (e.g. "Go 1.24.0") not "or later".
-
+**Split-page case**: `wiki/infra.md` becomes a router:
 ```markdown
-# Runbook
+# Infrastructure
 
-## Prerequisites
-<list tools with versions from §1 variables; cite the manifest file (e.g. ../app/go.mod), not the README>
+This repo's AWS infrastructure is defined in Terraform under `infra/`. Environments: <list>.
 
-## Local setup
-<command block from README>
-
-## Run tests
-<command block>
-
-## Build
-<command block; cite build.sh or Makefile>
-
-## Deploy
-<command block; cite deployment workflow>
-
-## Workflows
-<table from WORKFLOW_FILES: file | purpose (one line, inferred from name + first 20 lines if read)>
-
-## Useful scripts
-<table of root-level *.sh files: script | one-line purpose inferred from filename>
-```
-
-### 4.6 `wiki/architecture.md`
-
-**Skip condition**: if no `infra.md` was written AND fewer than 2 module pages exist, skip with: `skipped: wiki/architecture.md (insufficient material)`.
-
-Synthesizes from already-written module and infra pages. **Do not re-read source files.**
-
-```markdown
-# Architecture
-
-## System overview
-<1–2 paragraphs>
-
-## Component diagram
-```mermaid
-flowchart TD
-    <≤10 nodes; only components with evidence in this repo>
-    <every arrow corresponds to a verified dependency>
-```
-<!-- draft: verify arrows before sharing externally -->
-
-## Components
-<table: component | role | wiki page link>
-
-## External dependencies
-<table: service | purpose | evidence file>
-
-## Data flow
-<narrative of the main happy path, citing module pages with [[wikilinks]]>
-```
-
-Mermaid rules: max 10 nodes; only components with evidence in this repo; every arrow corresponds to a Terraform resource, SDK import, or explicit README claim. Always include the `<!-- draft -->` HTML comment.
-
-### 4.7 `wiki/overview.md`
-
-200–400 words. Plain language. No jargon without a `[[glossary]]` link. Version data **exclusively** from §1 computed variables — never from README prose.
-
-```markdown
-# Overview
-
-## What is this?
-<1 paragraph>
-
-## Who uses it?
-<1 paragraph>
-
-## Key capabilities
+## Resource types
+- [[infra/lambdas]] — 42 Lambda functions
+- [[infra/dynamodb-tables]] — 1 table with 7 GSIs
+- [[infra/api-gateways]] — 1 REST API
 - ...
-- (4–6 bullets)
 
-## Tech stack
-| Component | Technology |
-|---|---|
-| Runtime | <GO_VERSION or NODE_VERSION> |
-| Infrastructure | <Terraform <TF_VERSION>, AWS provider <AWS_PROVIDER_VERSION>, ...> |
-| Persistence | <inferred from AWS_RESOURCE_TYPES> |
-| Compute | <AWS Lambda (<N> functions) — use `aws_lambda_function` count from AWS_RESOURCE_TYPES as the authoritative Lambda count, not the total number of cmd/ directories (which also includes CLI tools and migration scripts)> |
+## Small inventories
+<types with count <3, listed inline with their resource names>
 
-## Where to go next
-- [[architecture]]
-- [[runbook]]
-- [[index]]
+## Environments
+<bulleted list>
 ```
 
-### 4.8 `wiki/log.md`
+Each `wiki/infra/<slug>.md` has:
+```markdown
+# <Resource type, human-readable plural>
+
+There are <N> <resource type> in this repo, defined under `infra/`.
+
+<1–2 sentences from Subagent B about what these resources do collectively.>
+
+## Resources
+<bulleted list of names — all of them>
+
+{{ Section-specific notes, e.g. for DynamoDB: list GSIs; for Lambdas: link [[lambdas]] for runtime descriptions. }}
+```
+
+### 5.4 `wiki/log.md`
 
 Read `<skill-dir>/templates/wiki/log.md.tmpl`. Substitute:
-- `{{TIMESTAMP}}` → current UTC timestamp, format `YYYY-MM-DD HH:MM UTC`
+- `{{TIMESTAMP}}` → current UTC timestamp, `YYYY-MM-DD HH:MM UTC`
 - `{{COMMAND}}` → `init`
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{BRANCH}}` → `REPO_BRANCH`
-- `{{PAGE_COUNT}}` → write the placeholder `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` (recursively), then `sed -i` (or equivalent) to replace `__PAGE_COUNT__` with the final number in `wiki/log.md`. This ensures log and completion summary agree.
-- `{{TOOL_VERSION}}` → `0.1.0` (from SKILL.md frontmatter)
+- `{{PAGE_COUNT}}` → write `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` recursively and `sed -i` (or equivalent) to replace `__PAGE_COUNT__`.
+- `{{TOOL_VERSION}}` → `0.2.0`
 
-Write to `wiki/log.md`.
+### 5.5 `wiki/index.md` (last)
 
-### 4.9 `wiki/index.md`
+Compute staleness suffix: for `init`, always empty (`REPO_SHA == HEAD`).
 
-Last wiki page written. Compute the staleness suffix:
+Read `<skill-dir>/templates/wiki/index.md.tmpl`. Placeholders and their values:
 
-```bash
-git rev-list --count <REPO_SHA>..HEAD     # → COMMITS_AHEAD
-```
-
-Since this is `init`, `REPO_SHA == HEAD`, so `COMMITS_AHEAD == 0` and the staleness suffix is empty. (`refresh.md` uses the same template with non-zero values when applicable.)
-
-Read `<skill-dir>/templates/wiki/index.md.tmpl`. Substitute:
 - `{{REPO_NAME}}` → `REPO_NAME`
 - `{{DATE}}` → today, `YYYY-MM-DD`
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
-- `{{STALE_SUFFIX}}` → empty (init case)
-- `{{START_HERE_LINKS}}` → bulleted list, only of pages actually written:
-  - `- [[overview]] — what this repo is` (only if `wiki/overview.md` exists)
-  - `- [[architecture]] — components and data flow` (only if exists)
-  - `- [[runbook]] — build, test, deploy` (only if exists)
-- `{{MODULE_LINKS}}` → bulleted list of `- [[modules/<slug>]]` for each module page actually written
-- `{{INFRA_SECTION}}` → if `wiki/infra.md` exists: `\n## Infrastructure\n- [[infra]]\n` (with leading newline so it spaces correctly under the module list); else empty string
-- `{{REFERENCE_LINKS}}` → bulleted list, only of pages actually written:
-  - `- [[glossary]]` (only if `wiki/glossary.md` exists)
-  - `- [[repo-map]]` (always — repo-map is never skipped)
+- `{{STALE_SUFFIX}}` → empty for `init`; `refresh` populates if applicable
+- `{{OVERVIEW_PARAGRAPH}}` → the prose returned by Subagent D, dropped in verbatim
+- `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this order: Lambdas, CLI tools, Migration scripts, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`. Omit any category that wasn't emitted.
+- `{{TECH_STACK_SECTION}}` → if any of `GO_VERSION` / `NODE_VERSION` / `TF_VERSION` / `AWS_PROVIDER_VERSION` is not `unknown`: emit `\n## Tech stack\n\n<Markdown table>\n` with one row per known version (Runtime, Terraform, AWS provider). Skip unknown rows. If all four are `unknown`, substitute the empty string — the heading is part of the placeholder so it disappears with the section.
+- `{{TESTS_SECTION}}` → if `TEST_SUITES` non-empty: `\n## Tests\n\n<one paragraph naming the test suite directories>\n`. Else empty string.
 
-All links are `[[wikilinks]]`. **No external links** in `index.md`. Never include a wikilink to a page that wasn't written — lint E1 will fail.
+Never include a wikilink to a page that wasn't written.
 
-### 4.10 `AGENTS.md` (or extension)
+Never include a wikilink to a page that wasn't written.
+
+### 5.6 `AGENTS.md` (or extension)
 
 Read `<skill-dir>/templates/AGENTS_BLOCK.md`. Call its content `BLOCK`.
 
-If `AGENTS.md` does not exist in the repo root: write `BLOCK` as the entire file contents.
-
-If `AGENTS.md` exists:
-1. Check whether it already contains `<!-- repo-llm-wiki: begin -->`. If yes, leave the file untouched and print: `wiki block already present in AGENTS.md`.
-2. Otherwise, append a single blank line followed by `BLOCK` (with its own trailing newline) to the end of the file.
-
-Never replace or rewrite an existing `AGENTS.md`.
+- If `AGENTS.md` does not exist: write `BLOCK` as the entire file.
+- If `AGENTS.md` exists and contains `<!-- repo-llm-wiki: begin -->`: leave untouched, print `wiki block already present in AGENTS.md`.
+- Otherwise append a blank line then `BLOCK` to the end. **Never replace** existing content.
 
 ---
 
-## Step 4 — Print completion summary
+## Step 6 — Completion summary
 
 ```
 Wiki generated in wiki/ (<PAGES_WRITTEN_COUNT> pages)
 
   wiki/index.md          ← start here
-  wiki/overview.md
-  wiki/architecture.md      <list only if not skipped>
-  wiki/modules/          (<M> pages)
-  wiki/infra.md             <list only if not skipped>
-  wiki/runbook.md
-  wiki/repo-map.md
-  wiki/glossary.md          <list only if not skipped>
+  wiki/lambdas.md        (+ <N> detail pages)
+  wiki/cli.md            (+ <N> detail pages)
+  wiki/migrations.md     (+ <N> detail pages)
+  wiki/scripts.md
+  wiki/infra.md          (+ <N> detail pages, if split)
   wiki/log.md
   AGENTS.md              ← extended with wiki block
 
 SHA: <REPO_SHA[0:7]>  Branch: <REPO_BRANCH>
 
-Next: review wiki/index.md, then commit wiki/ to git.
+Next: open wiki/index.md, then commit wiki/ to git.
 Run /repo-llm-wiki lint to validate.
 ```
 
-`<M>` = number of pages in `wiki/modules/`. Only list pages that were actually written (omit any that printed `skipped:`).
+List only categories that were actually emitted.
 
 ---
 
 ## Atomicity note
 
-Pages are written directly to `wiki/`. If a step fails mid-generation, the wiki is in a partial state. Recovery: the user removes `wiki/` and re-runs `init`. A future revision may write to `.wiki.tmp/` and atomic-move on success.
+Pages are written directly to `wiki/`. If a step fails mid-generation, the wiki is in a partial state. Recovery: remove `wiki/` and re-run `init`.

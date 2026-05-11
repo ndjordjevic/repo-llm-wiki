@@ -1,8 +1,8 @@
 ---
 name: repo-llm-wiki
 description: "Generates a committable Markdown wiki from the repo it lives in — invoke with /repo-llm-wiki"
-version: "0.1.0"
-last_updated: "2026-05-02"
+version: "0.2.0"
+last_updated: "2026-05-11"
 
 compatible_agents:
   tested:
@@ -37,11 +37,13 @@ Generates a small, accurate, committable Markdown wiki *inside* a repo, written 
 - "Lint the repo wiki"
 
 ```
-repo source files (Go, TF, README, workflows, ...)
-    ↓  collect (shell, file reads)
-in-memory facts (versions, GSIs, lambdas, ...)
-    ↓  generate
-wiki/  (committed, cited, agent-readable)
+repo source files (Go, TF, README, workflows, scripts, ...)
+    ↓  enumerate (cheap shell + reads — main agent)
+inventory (cmd dirs, tf resources, scripts, versions)
+    ↓  deep analyse in parallel (subagents)
+flow narratives + resource summaries + overview prose
+    ↓  decide layout + write pages (main agent)
+wiki/  (committed, drill-down, agent-readable)
     ↓  lint
 a healthy, queryable knowledge base
 ```
@@ -60,7 +62,11 @@ This SKILL.md and its sibling files (`init.md`, `refresh.md`, `lint.md`, `templa
 
 ## Execution model
 
-This skill is plain Markdown instructions. The "agent" referenced throughout is the host LLM session running the skill (Claude Code, Cursor, or Copilot). Single-agent: one session reads instructions, runs shell commands, reads files, and writes pages, in order. No external models, no orchestration daemon.
+This skill is plain Markdown instructions. The "agent" referenced throughout is the host LLM session running the skill (Claude Code, Cursor, or Copilot).
+
+**Two-layer**: the main session does the cheap deterministic work (shell enumeration, layout decisions, page writing) and **fans out to subagents in parallel** for the expensive analysis pass — reading every Lambda's entrypoint chain, classifying Terraform resources, grouping scripts, drafting the overview paragraph. Subagent returns are short, structured payloads the main agent assembles into pages. This keeps style consistent (one writer) and protects the main context (subagent context is discarded after each task).
+
+No external models, no orchestration daemon. On hosts without a subagent primitive, the main agent performs the analysis itself inline; output will be the same but slower and noisier.
 
 ## Dispatch
 

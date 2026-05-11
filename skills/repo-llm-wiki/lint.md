@@ -2,7 +2,9 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-`lint` is non-destructive: it reads only. It collects all errors and warnings and prints a grouped report at the end. **Run all checks even if early checks fail** — exit only after the full report is printed.
+`lint` is non-destructive: it reads only. It collects all errors and warnings and prints a grouped report at the end. **Run all checks even if early checks fail.**
+
+The v0.2 wiki has no source-file citations and no mermaid diagrams; lint reflects that.
 
 ---
 
@@ -15,67 +17,62 @@
 
 ## Errors (each makes the wiki invalid)
 
-For each finding, record `<page>:<problem>` in an `ERRORS` list.
+Record `<page>: <problem>` in an `ERRORS` list.
 
 ### E1. Broken wikilinks
-For every `[[<slug>]]` occurrence in any file under `wiki/`, check that `wiki/<slug>.md` exists. Slugs may contain a slash (`modules/foo`). For each missing target, record: `<source-page>: broken wikilink [[<slug>]]`.
+For every `[[<slug>]]` occurrence in any file under `wiki/`, check `wiki/<slug>.md` exists. Slugs may contain a slash (`lambdas/amendArrangement`). Record: `<source-page>: broken wikilink [[<slug>]]`.
 
-### E2. Broken file citations
-For every Markdown link in `wiki/` whose target is a relative path (`./...` or `../...`), resolve from the file's directory and check that the path exists in the repo. For each broken link, record: `<source-page>: broken citation -> <resolved-path>`.
+### E2. Source-file citations present
+The v0.2 wiki must not contain relative-path links to source files. For every Markdown link in `wiki/` whose target matches `^\.\./` or `^\./` (relative path leaving `wiki/`), record: `<source-page>: source-file citation should be removed: <target>`.
 
-(Skip external links: `http://`, `https://`, `mailto:`, anchors `#...`.)
+This is a stricter inversion of the v0.1 rule: file links used to be required, now they're forbidden.
 
 ### E3. Missing log entry
-`wiki/log.md` must contain at least one line starting with `## ` (a generation entry). If absent, record: `wiki/log.md: no generation entries`.
+`wiki/log.md` must contain at least one line starting with `## `. If absent: `wiki/log.md: no generation entries`.
 
 ### E4. Missing AGENTS.md block
-`AGENTS.md` must exist at the repo root and contain `<!-- repo-llm-wiki: begin -->`. If `AGENTS.md` is absent, or the marker is missing, record: `AGENTS.md: missing repo-llm-wiki block`.
+`AGENTS.md` must exist at the repo root and contain `<!-- repo-llm-wiki: begin -->`. Otherwise: `AGENTS.md: missing repo-llm-wiki block`.
 
-### E5. index.md missing links
-For every `*.md` file directly under `wiki/` (excluding `log.md` and anything inside `.archive/`), check that `wiki/index.md` references it via `[[<slug>]]`. For each missing entry, record: `wiki/index.md: missing link to <slug>`.
+### E5. index.md must link every top-level page
+For every `*.md` file directly under `wiki/` (excluding `log.md` and anything inside `.archive/`), check that `wiki/index.md` references it via `[[<slug>]]`. Record: `wiki/index.md: missing link to <slug>`.
 
-For module pages under `wiki/modules/`, check that `wiki/index.md` references them as `[[modules/<slug>]]`.
+### E6. Category–detail consistency
+For every detail page under `wiki/<category>/<slug>.md` (where `<category>` ∈ {`lambdas`, `cli`, `migrations`, `infra`}), check:
+- `wiki/<category>.md` exists, AND
+- `wiki/<category>.md` references the detail page via `[[<category>/<slug>]]`.
 
-### E6. Mermaid blocks
-For each ` ```mermaid ` fenced block found in any wiki page:
-- The first non-blank line must start with one of: `flowchart`, `graph`, `sequenceDiagram`, `classDiagram`, `stateDiagram`, `erDiagram`, `gantt`, `pie`, `journey`, `mindmap`.
-- The block must contain at least one line with `-->`, `---`, `:`, or `==>`.
+For every `[[<category>/<slug>]]` link inside `wiki/<category>.md`, check the detail page exists.
 
-Failures recorded as: `<page>: malformed mermaid block (no diagram-type keyword)` or `<page>: malformed mermaid block (no edges/nodes)`.
+Record orphans both ways:
+- `wiki/<category>.md: missing link to <slug>` (detail page exists, list page doesn't link)
+- `wiki/<category>/<slug>.md: orphan (no listing in <category>.md)` (link missing)
+- `wiki/<category>.md: dangling link [[<category>/<slug>]] (page missing)`
 
-This is regex-only and catches obvious corruption; it does not validate semantics.
+### E7. Empty pages
+For every `*.md` file under `wiki/`, check it has at least 50 non-whitespace characters of body (excluding the H1). Record: `<page>: page is effectively empty`. Empty pages indicate a generation failure.
 
 ---
 
-## Warnings (don't fail the lint, but flag)
+## Warnings (don't fail the lint)
 
-For each finding, record in `WARNINGS` list.
+Record in `WARNINGS`.
 
 ### W1. Stale wiki
 Parse the SHA from the most recent `## ` entry in `wiki/log.md` (look for `- SHA: <hex>` on the line below). Run:
 ```bash
 git rev-list --count <log-sha>..HEAD     # → COMMITS_AHEAD
 ```
-If the call succeeds and `COMMITS_AHEAD > 20`, record: `wiki staleness: HEAD is <N> commits ahead of last refresh`.
+If `COMMITS_AHEAD > 20`, record: `wiki staleness: HEAD is <N> commits ahead of last refresh`. If the SHA can't be parsed or `git rev-list` fails: `wiki staleness: cannot compare with HEAD (log SHA <X> not found)`.
 
-If the SHA can't be parsed or `git rev-list` fails (e.g. log SHA is no longer in history after a force-push), record a warning: `wiki staleness: cannot compare with HEAD (log SHA <X> not found)`.
+### W2. Confidence: low markers
+For each page containing `Confidence: low`, record: `<page>: contains "Confidence: low" — verify`.
 
-### W2. Uncited pages
-For each file matching `wiki/architecture.md` or `wiki/modules/*.md`, count occurrences of `([` (opening of a Markdown link). If the count is **zero**, record: `<page>: no citations`.
-
-(This is a deterministic per-page rule. Per-paragraph quality requires human judgment and is out of scope for lint.)
-
-### W3. Draft mermaid present
-If `wiki/architecture.md` exists and contains `<!-- draft -->`, record: `wiki/architecture.md: mermaid diagram marked draft — verify arrows before sharing externally`.
-
-### W4. Confidence: low markers
-For each page in `wiki/` containing `Confidence: low`, record: `<page>: contains "Confidence: low" — verify`.
+### W3. Suspiciously short detail page
+For each `wiki/<category>/<slug>.md` whose body is < 200 characters (excluding the H1 and the `> Type:` line), record: `<page>: detail page is very short — flow narrative may be missing`.
 
 ---
 
 ## Report
-
-Print the report exactly in this format. Sections with no findings are still printed with `(none)`.
 
 ```
 repo-llm-wiki lint
@@ -93,7 +90,6 @@ WARNINGS (<n>)
 Result: <PASS | FAIL>
 ```
 
-`Result: PASS` if `ERRORS` is empty (warnings do not fail).
-`Result: FAIL` otherwise.
+`PASS` if `ERRORS` is empty; warnings do not fail.
 
-Do not auto-fix anything. Print the report and stop.
+Do not auto-fix. Print the report and stop.

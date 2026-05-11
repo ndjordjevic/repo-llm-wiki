@@ -2,7 +2,7 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-`refresh` is one-shot regeneration — every page is regenerated. The only difference from `init` is the guard direction and the log entry behaviour.
+`refresh` is one-shot regeneration — every page is regenerated. The only differences from `init` are the guard direction, the log entry behaviour, and the orphan-cleanup pass.
 
 ---
 
@@ -15,7 +15,7 @@
 ```bash
 git rev-parse --is-inside-work-tree
 ```
-If this returns anything other than `true`, **stop**:
+If anything other than `true`, **stop**:
 > "repo-llm-wiki requires a git repository."
 
 ---
@@ -24,34 +24,37 @@ If this returns anything other than `true`, **stop**:
 
 Print: *"Refreshing wiki from current HEAD..."*
 
-1. **Capture prior log SHA.** Before writing anything, parse the SHA from the most recent `## ` entry in `wiki/log.md`. Store as `PRIOR_SHA`. If `wiki/log.md` is missing or unparseable, `PRIOR_SHA = unknown`.
+1. **Capture prior log SHA.** Parse the SHA from the most recent `## ` entry in `wiki/log.md`. Store as `PRIOR_SHA`. If missing/unparseable, `PRIOR_SHA = unknown`.
 
-2. **Run Step 1 from `init.md`** — repo data collection (§1.1–§1.9).
+2. **Snapshot existing pages.** Record the set of every `*.md` file currently under `wiki/` (excluding `log.md` and `.archive/`). Call this `PRIOR_PAGES`. Used in step 5 for orphan cleanup.
 
-3. **Compute staleness for index page**:
+3. **Run Steps 1–5 from `init.md`** — repo data collection, subagent fan-out, layout decision, directory creation, page writing. All skip conditions and the infra-split rule apply identically. **Overwrite** existing pages (do not merge prose).
+
+   Two exceptions:
+   - **`wiki/log.md`** — do **not** overwrite. Prepend a new entry at the top (after the `# Generation log` heading) using the template substitutions from `init.md` §5.4 with `{{COMMAND}}` = `refresh`. Existing entries below are preserved verbatim.
+   - **`AGENTS.md` block**: if the block already exists, leave the file untouched and print: `AGENTS.md wiki block already present`. Otherwise append per `init.md` §5.6. **Never modify** existing block content.
+
+4. **Compute staleness for completion summary**:
    ```bash
    git rev-list --count <PRIOR_SHA>..HEAD     # → COMMITS_AHEAD
    ```
-   If the call fails (PRIOR_SHA unknown or invalid), set `COMMITS_AHEAD = 0` and proceed.
+   If `PRIOR_SHA == unknown` or the call fails, `COMMITS_AHEAD = 0`.
 
-4. **Regenerate every wiki page** in the order specified in `init.md` §3.1–§3.9. **Overwrite** existing pages (do not merge prose). The skip conditions documented in `init.md` apply identically (e.g. skip `wiki/infra.md` if no Terraform files found).
+5. **Orphan cleanup.** Compute `WRITTEN_PAGES` = pages written in step 3. For every page in `PRIOR_PAGES` that is **not** in `WRITTEN_PAGES`, the layout changed (a lambda was removed, a category went empty, an infra split flipped). Move it to `wiki/.archive/<original-path>` rather than deleting, so the user can recover prose if a regeneration regressed it.
 
-   Two exceptions:
-   - **`wiki/log.md`** — do **not** overwrite. Prepend a new entry at the top (after the `# Generation log` heading and intro paragraph). The new entry uses the template substitutions from `init.md` §4.8 with `{{COMMAND}}` = `refresh`. Existing entries below are preserved verbatim.
-   - **`wiki/.archive/`** — leave untouched.
+   ```bash
+   mkdir -p wiki/.archive
+   # for each orphan: mv "wiki/<path>" "wiki/.archive/<path>"
+   ```
 
-   **Note on stale module pages**: refresh regenerates module pages but does not delete pages from prior runs. If grouping changed (e.g. a Lambda was added and the cluster reshaped), old `wiki/modules/<old-slug>.md` files may remain. `lint` E5 will flag any orphan as a missing index link; the user removes orphans manually. Auto-pruning is a future improvement.
-
-5. **`wiki/index.md` staleness suffix**: set `STALE_SUFFIX` empty. After a successful refresh, the new log entry's SHA equals HEAD, so the index is current at the moment this run completes. The `COMMITS_AHEAD` figure computed in step 3 is shown in the completion summary (informational only). The staleness warning in `index.md` is meaningful only between refreshes; `lint` (W1) handles that case.
-
-6. **`AGENTS.md` block**: if the block (`<!-- repo-llm-wiki: begin -->`) already exists, leave the file untouched and print: `AGENTS.md wiki block already present`. Otherwise append the block per `init.md` §4.10. **Never** modify existing block content during `refresh` — the block is immutable once present.
+   Print one line per moved page: `archived: wiki/<path>`.
 
 ---
 
 ## Completion summary
 
 ```
-Wiki refreshed (<PAGES_WRITTEN_COUNT> pages)
+Wiki refreshed (<PAGES_WRITTEN_COUNT> pages, <ORPHANS_COUNT> archived)
 
   <list of pages actually written this run>
 
@@ -61,4 +64,4 @@ Previous SHA: <PRIOR_SHA[0:7]>  (<COMMITS_AHEAD> commits since)
 Run /repo-llm-wiki lint to validate.
 ```
 
-If `PRIOR_SHA == REPO_SHA` (refresh on an unchanged repo), the line "Previous SHA …" should still be printed; `COMMITS_AHEAD == 0` is informative.
+If `PRIOR_SHA == REPO_SHA`, still print the "Previous SHA" line; `COMMITS_AHEAD == 0` is informative.
