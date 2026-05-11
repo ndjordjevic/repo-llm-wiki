@@ -11,9 +11,10 @@ The wiki is **small and drill-down**. From `index.md` a reader picks a category 
 Hard rules that shape every step below:
 
 - **Only `[[wikilinks]]` between wiki pages.** No relative paths to source files (`../app/cmd/...`). Obsidian opens `wiki/` as the vault root and source-file paths resolve to nothing; that's why we drop them.
-- **Fixed category set. Do not invent categories.** The wiki has exactly four possible top-level categories: `lambdas`, `cli`, `scripts`, `infra`. A category page is emitted **only** when its source content exists in the repo; otherwise it is skipped. Never invent additional categories (no `migrations`, no `services`, no `tools`, no `pipelines`) — migration Lambdas go in `lambdas`, migration CLI tools go in `cli`, deprecated items are tagged inline within their natural category.
+- **Fixed category set. Do not invent categories.** The wiki has exactly **five** possible top-level categories: `lambdas`, `cli`, `packages`, `scripts`, `infra`. A category page is emitted **only** when its source content exists in the repo; otherwise it is skipped. Never invent additional categories (no `migrations`, no `services`, no `tools`, no `pipelines`, no `modules`) — migration Lambdas go in `lambdas`, migration CLI tools go in `cli`, deprecated items are tagged inline within their natural category.
 - **One starting page only: `index.md`.** No separate `overview.md`, `architecture.md`, `repo-map.md`, or `glossary.md`. The overview paragraph lives in `index.md`.
-- **Per-item pages describe a flow, not files.** For a Lambda: who triggers it → what the handler does → what the service does → where data lands → response. 3–6 sentences. No file paths.
+- **Per-item pages describe a flow or a role, not files.** For a Lambda: who triggers it → what the handler does → what the service does → where data lands → response. For a CLI tool: invocation → what it does → where output goes. For a package: what it's for → main types/functions exposed → who imports it. 3–6 sentences. No file paths.
+- **Supported repo shapes (v0.4)**: Go AWS-Lambda monorepos (with `cmd/` or `app/cmd/`), Go libraries (top-level package directories, no `cmd/`), Go single-binary services (`main.go` at root or one `cmd/<name>/`). For other shapes the skill degrades to a minimal `index.md` overview — see §1.10. Terraform is the only enumerated IaC; CloudFormation / Serverless / SAM / CDK are acknowledged but not parsed.
 
 ---
 
@@ -85,17 +86,64 @@ Search candidate paths in order; **first match wins**. Leave `unknown` if no sou
 
 ```bash
 find ./app/cmd ./cmd -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort   # → CMD_DIRS
+
+# Root main.go (single-binary services)
+[ -f ./main.go ] && echo "./" > /tmp/root_main || true                    # → ROOT_MAIN (presence flag)
 ```
 
-### 1.6 Infrastructure enumeration
+### 1.5b Top-level package enumeration (for library shape)
+
+A "top-level package directory" is a non-hidden subdirectory of the repo root that:
+- contains at least one `.go` file directly (not just nested files), AND
+- is **not** in the skip list (`cmd/`, `app/`, `internal/`, `vendor/`, `node_modules/`, `dist/`, `build/`, `tests/`, `infra/`, `deployments/`, `archive/`, `.git/`, `.github/`, `.idea/`, `.vscode/`, `.devcontainer/`, `.claude/`, `.cursor/`, `.obsidian/`, `wiki/`, `docs/`, `examples/`), AND
+- is **not** itself a `_test.go`-only directory.
+
+```bash
+# Find top-level dirs with at least one .go file
+for d in $(find . -maxdepth 1 -mindepth 1 -type d -not -name '.*'); do
+  base=$(basename "$d")
+  case "$base" in
+    cmd|app|internal|vendor|node_modules|dist|build|tests|infra|deployments|archive|wiki|docs|examples) continue ;;
+  esac
+  if find "$d" -maxdepth 1 -name '*.go' -not -name '*_test.go' | grep -q . ; then
+    echo "$d"
+  fi
+done | sort
+# → PACKAGE_DIRS
+```
+
+If `MODULE_NAME` is unknown (no `go.mod` found), `PACKAGE_DIRS` is empty.
+
+### 1.6 Infrastructure enumeration (Terraform only)
 
 ```bash
 find infra -maxdepth 1 -name '*.tf' 2>/dev/null | sort                                          # → TF_FILES
 grep -rh "^resource \"aws_" infra/*.tf 2>/dev/null | grep -oE '"aws_[^"]+"' | sort | uniq -c    # → AWS_RESOURCE_COUNTS
 find infra/environments -type f -name '*.tfvars' 2>/dev/null | sort                             # → ENV_FILES
+
+# Detect non-Terraform IaC (acknowledged but not parsed)
+{
+  find deployments -maxdepth 2 -name '*.yml' -o -name '*.yaml' 2>/dev/null | head -1
+  [ -f serverless.yml ] && echo "serverless.yml"
+  [ -f template.yaml ] && echo "template.yaml (likely SAM)"
+  [ -f cdk.json ] && echo "cdk.json (likely CDK)"
+} | head -5
+# → NON_TF_IAC_HINTS (strings; informational only)
 ```
 
 `AWS_RESOURCE_TOTAL` = sum of counts in `AWS_RESOURCE_COUNTS`. Used for the infra-splitting decision in §3.
+
+**Important**: many Terraform repos use **modules**, not `resource "aws_*"` blocks (e.g. `module "my_lambda" { source = "..." }` that internally creates a Lambda). The `grep` above will return zero counts in that case. If `TF_FILES` is non-empty but `AWS_RESOURCE_TOTAL == 0`, fall back to counting `module` blocks **per .tf file** and treat each `.tf` file as a logical resource type:
+
+```bash
+for f in $(find infra -maxdepth 1 -name '*.tf' 2>/dev/null); do
+  count=$(grep -c "^module " "$f" 2>/dev/null)
+  [ "$count" -gt 0 ] && echo "$count $(basename "$f" .tf)"
+done | sort -rn
+# → MODULE_COUNTS_BY_FILE (used when AWS_RESOURCE_COUNTS is empty)
+```
+
+In that fallback case, the "resource type" for split decisions is the `.tf` filename (e.g. `lambda.tf` → "lambdas", `dynamodb.tf` → "dynamodb-tables", `sqs.tf` → "sqs-queues").
 
 ### 1.7 Scripts
 
@@ -118,11 +166,36 @@ find tests -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort           # → TE
 - `*_test.go`, `*.test.ts`
 - Files larger than 1000 lines unless explicitly listed by a subagent task below
 
+### 1.10 Repo-shape detection
+
+Compute `REPO_SHAPE` from the data collected above. **First match wins**:
+
+1. `len(CMD_DIRS) >= 2` → `go-monorepo` (Lambda/CLI monorepo — the skill's sweet spot).
+2. `len(CMD_DIRS) == 1` → `go-single-binary` (one entrypoint under `cmd/`).
+3. `len(CMD_DIRS) == 0` AND `ROOT_MAIN` exists → `go-single-binary` (entrypoint at repo root).
+4. `len(CMD_DIRS) == 0` AND `len(PACKAGE_DIRS) >= 1` AND `MODULE_NAME` is known → `go-library`.
+5. Otherwise → `go-other` (the skill produces a minimal `index.md` only — see §3).
+
+Print: `Detected repo shape: <REPO_SHAPE>` so the user knows what to expect.
+
+**Shape drives §3 layout decisions.** Each shape produces a different subset of the five-category set. The category contract is the same in every case (closed set, flat tables, type-driven placement).
+
 ---
 
 ## Step 2 — Deep analysis (subagents in parallel)
 
-Token-spend warning: the goal is to fan out so the main agent's context stays clean. Spawn the four subagents below **in a single message** (parallel) using the `Agent` tool with `subagent_type=general-purpose`. Wait for all to return before proceeding.
+Token-spend warning: the goal is to fan out so the main agent's context stays clean. Spawn the subagents below **in a single message** (parallel) using the `Agent` tool with `subagent_type=general-purpose`. Wait for all to return before proceeding.
+
+**Which subagents run depends on `REPO_SHAPE`**:
+
+| Shape | A (cmd/) | B (Terraform) | C (scripts) | D (overview) | E (packages) |
+|---|---|---|---|---|---|
+| go-monorepo | yes (sharded if >20) | if `TF_FILES` non-empty | if scripts or workflows | yes | if `PACKAGE_DIRS` non-empty (mixed repo) |
+| go-single-binary | yes (1 item) | if `TF_FILES` non-empty | if scripts or workflows | yes | if `PACKAGE_DIRS` non-empty |
+| go-library | no | if `TF_FILES` non-empty | if scripts or workflows | yes | yes |
+| go-other | no | if `TF_FILES` non-empty | if scripts or workflows | yes | no |
+
+**Subagent E is gated on `PACKAGE_DIRS`, not on shape.** A monorepo can have exported helper packages alongside `cmd/` (e.g. `connect-institution-connector`, `wtf` in the validation set); those get documented in `packages.md` exactly like a library's packages.
 
 Each subagent prompt must be self-contained: it has no view of this conversation. Include `DIR_TREE`, the relevant lists from §1, and the exact return format.
 
@@ -201,16 +274,42 @@ Cap return ~4k tokens.
 
 Singletons (one script in a group) are allowed but prefer grouping by prefix when ≥3 share one.
 
+### Subagent E — Package introspection (go-library shape only)
+
+Skip this subagent unless `REPO_SHAPE == go-library`.
+
+**Purpose**: for every entry in `PACKAGE_DIRS`, describe what the package is for, what it exposes, and who would import it.
+
+**Per-package investigation** (cap reads at 200 lines each):
+1. Read the first `*.go` file in the directory that is not `*_test.go` (typically named after the package, e.g. `api/api.go`, `errors/errors.go`).
+2. Extract the package's exported types (those starting with a capital letter — structs, interfaces, type aliases) and a small sample of exported functions/methods, capped at 10 names total.
+3. Scan for imports of common signal libraries to determine the package's flavour: HTTP client (`net/http`), AWS SDK (`aws-sdk-go`, `aws-lambda-go`), middleware (mentions `http.Handler`), data types (no external imports), etc.
+
+**Per-package return**:
+```
+{
+  "name": "api",
+  "role": "Top-level client constructor and request orchestration",
+  "exposes": ["Client", "NewClient", "Request", "RequestOption"],     // up to 10 exported identifiers
+  "summary": "Provides the primary Client type and request-building helpers consumers use to talk to the Basiq API. The Client wraps an HTTP client, holds authentication state, and exposes per-resource sub-clients (users, connections, transactions). Typical consumers import this package as their first touchpoint."
+}
+```
+
+**Return**: one object per package, plus a final summary table (alphabetised by name). Cap total return ~5k tokens.
+
 ### Subagent D — Repo purpose paragraph
 
-**Purpose**: write the 3–5 sentence overview paragraph that goes at the top of `index.md`. **Do not** take `README.md` at face value — it may be stale. Read:
-- `README.md` (full, up to 500 lines)
-- Names of all entries in `CMD_DIRS` (passed as input)
-- `DIR_TREE` (passed as input)
-- The top of one representative service file (first 100 lines), chosen by Subagent D from internal/service/.
-- Up to 3 swagger/openapi files under `infra/swaggers/` (first 50 lines each) if they exist.
+**Purpose**: write the 3–5 sentence overview paragraph that goes at the top of `index.md`. **Do not** take `README.md` at face value — it may be stale.
 
-Synthesize what the repo actually *does* in plain language. Identify the domain (e.g. "Open-banking data-sharing authorisations under the Australian CDR regime"). State the deployment shape briefly (e.g. "Deployed as AWS Lambdas behind API Gateway, with DynamoDB as the system of record"). Do not invent capabilities; if uncertain, say so with `Confidence: low`.
+**Read** (shape-dependent):
+- `README.md` (full, up to 500 lines) — always.
+- `DIR_TREE` (passed as input) — always.
+- `REPO_SHAPE` (passed as input) — always.
+- For `go-monorepo` and `go-single-binary`: names of all entries in `CMD_DIRS`; the top of one representative service file (first 100 lines) under `internal/service/` or equivalent; up to 3 swagger/openapi files under `infra/swaggers/` or `deployments/`.
+- For `go-library`: names of all entries in `PACKAGE_DIRS`; the top of the most-imported-looking package (often `api/`, `client/`, or the package that shares a name with the module), first 100 lines.
+- For `go-other`: just README + DIR_TREE; produce a best-effort overview and prefix it with `> Confidence: low — repo shape not recognised.`
+
+Synthesize what the repo actually *does* in plain language. Identify the domain (e.g. "Open-banking data-sharing authorisations under the Australian CDR regime", or "Go client SDK for the Basiq Open Banking API"). State the deployment / consumption shape briefly (e.g. "Deployed as AWS Lambdas behind API Gateway", or "Imported as a Go module by consumer applications"). Do not invent capabilities; if uncertain, say so with `Confidence: low`.
 
 **Return**: 3–5 sentences of prose, ready to drop into `index.md`. No headings, no citations, no wikilinks.
 
@@ -220,18 +319,25 @@ Synthesize what the repo actually *does* in plain language. Identify the domain 
 
 After subagents return, the main agent decides which pages to emit. **Emit no empty sections, no empty pages.**
 
-### 3.1 The four categories (fixed)
+### 3.1 The five categories (fixed)
 
-The category set is **closed**. The skill emits at most these four top-level pages, in this order on the index. Do not introduce others.
+The category set is **closed**. The skill emits at most these five top-level pages, in this order on the index. Do not introduce others.
 
-| Category | Page | Emit when |
-|---|---|---|
-| Lambdas | `wiki/lambdas.md` + `wiki/lambdas/<slug>.md` per item | at least one Subagent A item with `type=Lambda` |
-| CLI tools | `wiki/cli.md` + `wiki/cli/<slug>.md` per item | at least one Subagent A item with `type=CLI tool` |
-| Scripts | `wiki/scripts.md` | Subagent C returned at least one script group, **or** `WORKFLOW_FILES` is non-empty |
-| Infrastructure | see §3.2 | `AWS_RESOURCE_TOTAL > 0` |
+| Category | Page | Emit when | Shapes |
+|---|---|---|---|
+| Lambdas | `wiki/lambdas.md` + `wiki/lambdas/<slug>.md` per item | at least one Subagent A item with `type=Lambda` | go-monorepo, go-single-binary |
+| CLI tools | `wiki/cli.md` + `wiki/cli/<slug>.md` per item | at least one Subagent A item with `type=CLI tool` | go-monorepo, go-single-binary |
+| Packages | `wiki/packages.md` + `wiki/packages/<slug>.md` per item | `len(PACKAGE_DIRS) >= 1` (any shape — supports mixed monorepo + library repos) | any (go-library is the typical case, but a monorepo with exported helper packages also qualifies) |
+| Scripts | `wiki/scripts.md` | Subagent C returned at least one script group, **or** `WORKFLOW_FILES` is non-empty | any |
+| Infrastructure | see §3.2 | `AWS_RESOURCE_TOTAL > 0` OR `MODULE_COUNTS_BY_FILE` non-empty (Terraform-modules fallback) | any |
 
 CI workflows live as a `## CI workflows` subsection inside `wiki/scripts.md` — not a category. Tests, if present, live as a `## Tests` paragraph inside `wiki/index.md` — also not a category.
+
+**Index order on the index page**: Lambdas, CLI tools, Packages, Scripts, Infrastructure. Lambdas and Packages never coexist in practice (different shapes); the fixed order still applies.
+
+**For shape `go-other`**: skip §3.2 and all category pages. Emit just `wiki/index.md` (overview + tech stack) and `wiki/log.md`. The index notes: "This repo's shape isn't fully recognised by repo-llm-wiki (Go-AWS-Lambda monorepos, Go libraries, and Go single-binary services are supported). The overview above is best-effort; for deeper structure, run the skill against a supported shape or read the source directly."
+
+**Non-Terraform IaC**: if `NON_TF_IAC_HINTS` is non-empty AND `infra.md` was not emitted (because no Terraform files were found), add a single bullet to the `## Categories` section of `index.md` under a heading or note: "Infrastructure is defined outside Terraform (\<hints\>); this skill enumerates Terraform only." Do **not** create an `infra.md` you can't populate.
 
 **Items with `deprecated=true`** (e.g. `pfbToAMSMigration_old`, `basiqToPireanMigration_old`) stay in their natural category (`lambdas` if `type=Lambda`, `cli` otherwise) but are tagged `⚠ deprecated` in the row and in the detail page header. Do not segregate them into a separate page.
 
@@ -257,6 +363,7 @@ mkdir -p wiki
 # Create sub-directories only when their category will be emitted:
 #   mkdir -p wiki/lambdas
 #   mkdir -p wiki/cli
+#   mkdir -p wiki/packages
 #   mkdir -p wiki/infra
 ```
 
@@ -287,7 +394,22 @@ The "what it does (1 line)" column is the first sentence of the subagent's flow 
 
 **`wiki/cli.md`**: same structure as `lambdas.md`, with the `Trigger` column relabeled `Invocation`.
 
-**Category pages are flat tables.** Do not introduce subsections grouping items by purpose, by deprecation, by pipeline stage, or any other axis. A single table per category page, sorted alphabetically. The `Type` (for Lambdas, this means trigger; for CLI tools, "CLI invocation") and `⚠ deprecated` tag in the name column carry all the categorisation a reader needs. Subsections are how the previous version drifted into inventing categories — they're banned here.
+**`wiki/packages.md`** (go-library shape only):
+```markdown
+# Packages
+
+This module exposes <N> top-level packages. Click into each for what it exposes and who imports it.
+
+| Package | Role | Key exports |
+|---|---|---|
+| [[packages/api]] | Top-level client constructor | `Client`, `NewClient`, `Request` |
+| [[packages/errors]] | Domain error types | `Error`, `Wrap`, `Is` |
+| ... | | |
+```
+
+Sort alphabetically. The "Key exports" column lists up to 4 names from Subagent E's `exposes` list, comma-separated. Wrap each in backticks.
+
+**Category pages are flat tables.** Do not introduce subsections grouping items by purpose, by deprecation, by pipeline stage, or any other axis. A single table per category page, sorted alphabetically. The `Trigger`/`Invocation`/`Role` column and the `⚠ deprecated` tag in the name column carry all the categorisation a reader needs. Subsections are how the previous version drifted into inventing categories — they're banned here.
 
 **`wiki/scripts.md`** (template):
 ```markdown
@@ -308,7 +430,26 @@ The "what it does (1 line)" column is the first sentence of the subagent's flow 
 
 ### 5.2 Per-item detail pages
 
-Write `wiki/lambdas/<name>.md` for every `type=Lambda` item and `wiki/cli/<name>.md` for every `type=CLI tool` item. **Every item gets a detail page** — no inline grouping, no shortcuts. **Slug = item name verbatim** (preserve case from `CMD_DIRS`).
+Write `wiki/lambdas/<name>.md` for every `type=Lambda` item, `wiki/cli/<name>.md` for every `type=CLI tool` item, and `wiki/packages/<name>.md` for every package (go-library shape). **Every item gets a detail page** — no inline grouping, no shortcuts.
+
+**Package detail page contract** (`wiki/packages/<name>.md`):
+```markdown
+# <name>
+
+> Type: Go package · Module path: `<MODULE_NAME>/<name>`
+
+<3–6 sentence summary from Subagent E: what the package is for, what it exposes, who imports it. No file paths.>
+
+## Key exports
+- `Client` — primary type representing an API client
+- `NewClient(opts ...Option) *Client` — constructor
+- ... (up to ~10 from Subagent E's `exposes` list, with a brief role)
+
+## Related
+- [[packages]] — full list
+```
+
+The "Key exports" entries are short: the identifier and a 4–10 word role. Do not write full signatures or docs — readers go to the source for that. **Slug = item name verbatim** (preserve case from `CMD_DIRS`).
 
 **Hard rule, re-stated for the writer**: the body of a detail page contains **no relative paths to source files**. No `../app/...`, no `[handler.go](../...)`. Refer to handlers and services by their conceptual role ("the handler", "the authorisation service"), not by file path. Lint E2 fails the wiki otherwise. If the subagent's flow narrative contains such a path, strip it before writing.
 
@@ -394,7 +535,7 @@ Read `<skill-dir>/templates/wiki/log.md.tmpl`. Substitute:
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{BRANCH}}` → `REPO_BRANCH`
 - `{{PAGE_COUNT}}` → write `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` recursively and `sed -i` (or equivalent) to replace `__PAGE_COUNT__`.
-- `{{TOOL_VERSION}}` → `0.3.0`
+- `{{TOOL_VERSION}}` → `0.4.0`
 
 ### 5.5 `wiki/index.md` (last)
 
@@ -407,7 +548,7 @@ Read `<skill-dir>/templates/wiki/index.md.tmpl`. Placeholders and their values:
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{STALE_SUFFIX}}` → empty for `init`; `refresh` populates if applicable
 - `{{OVERVIEW_PARAGRAPH}}` → the prose returned by Subagent D, dropped in verbatim
-- `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this fixed order: Lambdas, CLI tools, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`. Omit any category that wasn't emitted. Do not add bullets for categories outside this set.
+- `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this fixed order: Lambdas, CLI tools, Packages, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`, `- [[packages]] — N packages`, etc. Omit any category that wasn't emitted. Do not add bullets for categories outside this set. If `REPO_SHAPE == go-other` and no categories were emitted, the section heading remains but the body is the single note from §3.1 about unrecognised shape.
 - `{{TECH_STACK_SECTION}}` → if any of `GO_VERSION` / `NODE_VERSION` / `TF_VERSION` / `AWS_PROVIDER_VERSION` is not `unknown`: emit `\n## Tech stack\n\n<Markdown table>\n` with one row per known version (Runtime, Terraform, AWS provider). Skip unknown rows. If all four are `unknown`, substitute the empty string — the heading is part of the placeholder so it disappears with the section.
 - `{{TESTS_SECTION}}` → if `TEST_SUITES` non-empty: `\n## Tests\n\n<one paragraph naming the test suite directories>\n`. Else empty string.
 
@@ -433,6 +574,7 @@ Wiki generated in wiki/ (<PAGES_WRITTEN_COUNT> pages)
   wiki/index.md          ← start here
   wiki/lambdas.md        (+ <N> detail pages)
   wiki/cli.md            (+ <N> detail pages)
+  wiki/packages.md       (+ <N> detail pages, go-library shape)
   wiki/scripts.md
   wiki/infra.md          (+ <N> detail pages, if split)
   wiki/log.md

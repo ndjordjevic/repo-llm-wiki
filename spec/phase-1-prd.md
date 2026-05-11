@@ -4,9 +4,26 @@
 > Sibling to [`pin-llm-wiki`](../../pin-llm-wiki/README.md) (which ingests external sources).
 > Scope: Phase 1 only. Phases 2–4 are referenced for context, not designed here.
 
-Status: draft 4 · Date: 2026-05-11 · Owner: nenad
+Status: draft 5 · Date: 2026-05-11 · Owner: nenad
 
-> **Draft-4 amendment.** v0.2 of the skill (draft 3) let the agent "discover categories" from the repo content. On the validation repo this produced a `migrations.md` page that the agent invented from scratch — splitting Lambdas across `lambdas.md` and `migrations.md`, and splitting CLI tools across `cli.md` and `migrations.md` based on a name-prefix heuristic. The user rejected that: categories must be **type-driven, not theme-driven**. v0.3 locks the category set to exactly four: `lambdas`, `cli`, `scripts`, `infra`. Migration-related items live in `lambdas` (if they use `aws-lambda-go`) or `cli` (otherwise), tagged inline with `⚠ deprecated` where applicable. Lint E8 now errors on any other top-level category page.
+> **Draft-5 amendment (v0.4 of the skill).** Survey of ~50 repos in `~/GolandProjects` confirms the v0.4 shape set covers the majority:
+> - 14 `go-monorepo` (e.g. connect-api with 101 cmd entries, tfaws-dregdata with 40, payments with 31)
+> - 8 `go-library` (e.g. basiq-api-go, twg, mci_faang, system-design, go-httpclient)
+> - 4 `go-single-binary`
+> - 2 mixed monorepo+library (`connect-institution-connector` 23 cmd + 8 pkgs, `wtf` 3 cmd + 5 pkgs) — supported by gating Subagent E on `PACKAGE_DIRS` non-empty rather than on shape
+> - ~16 non-Go / `go-other` repos — minimal `index.md`-only output is correct.
+>
+> **Known gap (deferred to v0.5)**: 6 pure Terraform-module repos (`tfm-ecloud-svc-aws-lambda`, `tfm-ecloud-svc-aws-s3`, `tfm-ecloud-svc-aws-sqs`, `terraform-modules`, `aws-api-gateway-infrastructure`, `aws-build-infrastructure`) currently fall through to `go-other` and emit only an index page. Properly documenting a reusable Terraform module requires a different `infra.md` contract — module interface (inputs/outputs/required-providers), not "app + environments + resource inventory". Out of scope for v0.4; will be a `terraform-module` shape in a future revision.
+>
+> v0.3 produced a clean wiki on the AWS-Lambda monorepo but emitted essentially nothing on a pure Go library. To make the skill genuinely repo-shape-aware:
+> - Added §1.10 repo-shape detection: `go-monorepo`, `go-single-binary`, `go-library`, or `go-other`.
+> - Expanded the closed category set from four to **five**, adding `packages` (top-level Go packages, emitted only for `go-library` shape). Order on the index: Lambdas, CLI tools, Packages, Scripts, Infrastructure.
+> - Added Subagent E (package introspection) — reads each top-level package's main `.go` file, extracts exported types/functions, returns role + key exports.
+> - Made Subagent D shape-aware: for libraries it reads top-level packages; for `go-other` shapes it produces a `Confidence: low` overview and the skill emits only `index.md` + `log.md`.
+> - Added a Terraform-modules fallback in §1.6: many real-world Terraform repos use `module "x" { source = "..." }` rather than `resource "aws_*"` blocks; the previous regex returned zero and produced no `infra.md`. Now falls back to counting modules per `.tf` file and treats the filename as the resource-type label.
+> - Acknowledged non-Terraform IaC (CloudFormation, Serverless, SAM, CDK) without parsing it — `index.md` notes its presence; no fake `infra.md`.
+>
+> **Draft-4 amendment (v0.3).** v0.2 of the skill let the agent "discover categories" from the repo content. On the validation repo this produced a `migrations.md` page that the agent invented from scratch — splitting Lambdas across `lambdas.md` and `migrations.md` based on a name-prefix heuristic. The user rejected that: categories must be **type-driven, not theme-driven**. v0.3 locked the category set to four: `lambdas`, `cli`, `scripts`, `infra`. Migration-related items live in `lambdas` (if they use `aws-lambda-go`) or `cli` (otherwise), tagged inline with `⚠ deprecated`. Lint E8 errors on any other top-level category page.
 >
 > **Draft-3 reset (kept for context).** Draft 2 produced a v0.1 wiki on the validation repo and the result was too heavy: a `repo-map`, a `glossary`, an `architecture` page with a useless 40-node mermaid, and module clusters that lumped 8 lambdas into one page. Draft 3 pivoted to a **drill-down** wiki: `index.md` → category page → per-item flow narrative. Source-file citations were dropped (broken in Obsidian); architecture/repo-map/glossary/overview pages dropped. Analysis fans out across subagents.
 

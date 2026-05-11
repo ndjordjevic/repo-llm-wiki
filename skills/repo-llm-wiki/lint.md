@@ -37,7 +37,7 @@ This is a stricter inversion of the v0.1 rule: file links used to be required, n
 For every `*.md` file directly under `wiki/` (excluding `log.md` and anything inside `.archive/`), check that `wiki/index.md` references it via `[[<slug>]]`. Record: `wiki/index.md: missing link to <slug>`.
 
 ### E6. Category–detail consistency
-For every detail page under `wiki/<category>/<slug>.md` (where `<category>` ∈ {`lambdas`, `cli`, `infra`}), check:
+For every detail page under `wiki/<category>/<slug>.md` (where `<category>` ∈ {`lambdas`, `cli`, `packages`, `infra`}), check:
 - `wiki/<category>.md` exists, AND
 - `wiki/<category>.md` references the detail page via `[[<category>/<slug>]]`.
 
@@ -52,9 +52,9 @@ Record orphans both ways:
 For every `*.md` file under `wiki/`, check it has at least 50 non-whitespace characters of body (excluding the H1). Record: `<page>: page is effectively empty`. Empty pages indicate a generation failure.
 
 ### E8. Unauthorised category page
-The v0.3 wiki has a **closed category set**: `lambdas`, `cli`, `scripts`, `infra` are the only permitted top-level category pages. Any other top-level `*.md` file or directory under `wiki/` (other than `index.md`, `log.md`, `.archive/`, `.obsidian/`) is an invented category.
+The v0.4 wiki has a **closed category set**: `lambdas`, `cli`, `packages`, `scripts`, `infra` are the only permitted top-level category pages. Any other top-level `*.md` file or directory under `wiki/` (other than `index.md`, `log.md`, `.archive/`, `.obsidian/`) is an invented category.
 
-For each such file or directory, record: `wiki/<name>(.md)?: unauthorised category (only lambdas/cli/scripts/infra are permitted)`. Common violations: `migrations.md`, `services.md`, `tools.md`, `pipelines.md`, `runbook.md`.
+For each such file or directory, record: `wiki/<name>(.md)?: unauthorised category (only lambdas/cli/packages/scripts/infra are permitted)`. Common violations: `migrations.md`, `services.md`, `tools.md`, `pipelines.md`, `runbook.md`, `modules.md`.
 
 ### E9. Lambda count consistency
 If both `wiki/lambdas.md` and `wiki/infra/lambda-functions.md` exist:
