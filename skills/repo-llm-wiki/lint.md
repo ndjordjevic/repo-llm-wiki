@@ -107,3 +107,5 @@ Result: <PASS | FAIL>
 `PASS` if `ERRORS` is empty; warnings do not fail.
 
 Do not auto-fix. Print the report and stop.
+
+**If an agent in autopilot mode fixes a broken wikilink by creating a missing `wiki/infra/<slug>.md`**, the agent must also remove the corresponding row from the `## Small inventories` table in `wiki/infra.md`. A resource type must appear in exactly one place: either as a `[[wikilink]]` in `## Resource types` (if it has a detail page) or as a row in `## Small inventories` (if it does not). Never both.

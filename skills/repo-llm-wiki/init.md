@@ -343,9 +343,19 @@ CI workflows live as a `## CI workflows` subsection inside `wiki/scripts.md` —
 
 **No detail-page grouping rule.** Every Lambda gets its own detail page. Every CLI tool gets its own detail page. The v0.2.0 rule that allowed inlining ≥6 prefix-sharing items is removed — it was the source of the "lambdas hiding in migrations.md" failure.
 
-### 3.1.1 Lambda-count consistency
+### 3.1.1 Lambda-count consistency (mandatory reconciliation pass)
 
-The count in `lambdas.md`'s opening sentence and any count in the overview paragraph must equal `len({items where type=Lambda})`. If Subagent D's overview prose mentions a different count — typically because it counted Terraform `aws_lambda_function` modules — reconcile by trusting the Terraform count (from Subagent B) and updating both `lambdas.md` and the overview to match. If the discrepancy is real (e.g. cmd-based count says 23 but Terraform deploys 26 because 3 Lambdas are sourced from outside `cmd/`), state it once on `lambdas.md`: "23 Lambdas built from `cmd/`; Terraform deploys 26 — see [[infra/lambda-functions]]."
+Before writing `index.md`, run this reconciliation. Do not skip it — Subagent D often miscounts (typically by including CLI tools in the Lambda count, or by stating "approximately N" where N is `len(CMD_DIRS)` rather than `len({Lambdas})`).
+
+Compute `LAMBDA_COUNT = len({items where type=Lambda})` and `CLI_COUNT = len({items where type=CLI tool})` from Subagent A. Then scan Subagent D's overview paragraph for any number that purports to describe Lambda or function count (regex-style: words like "Lambda", "function", "serverless function" near a number, including "approximately N", "around N", "N+", "over N"). For every such mention:
+
+- If the number equals `LAMBDA_COUNT` → leave it.
+- If the number equals `LAMBDA_COUNT + CLI_COUNT` (i.e. `len(CMD_DIRS)`) → rewrite the sentence to split the count, e.g. "deployed as `<LAMBDA_COUNT>` AWS Lambda functions, with `<CLI_COUNT>` companion CLI tools".
+- Otherwise → replace with `LAMBDA_COUNT` and verify against Subagent B's `aws_lambda_function` count. If Subagent B disagrees (e.g. cmd-based count says 23 but Terraform deploys 26), trust Subagent B for the index overview AND add a one-line note on `lambdas.md`: "23 Lambdas built from `cmd/`; Terraform deploys 26 — see [[infra/lambda-functions]]."
+
+The opening sentence of `lambdas.md` ("This repo deploys N AWS Lambda functions") must also equal `LAMBDA_COUNT`. Same applies to `cli.md` with `CLI_COUNT`.
+
+This pass is **mandatory on every `init` and every `refresh`**. A wrong count in the overview is the most-likely accuracy regression and the most visible to readers.
 
 ### 3.2 Infrastructure split rule
 
@@ -507,7 +517,8 @@ This repo's AWS infrastructure is defined in Terraform under `infra/`. Environme
 - ...
 
 ## Small inventories
-<types with count <3, listed inline with their resource names>
+<types with count <3 that do NOT have their own detail page, listed inline with their resource names>
+<!-- A type moves OUT of this table and into ## Resource types the moment a wiki/infra/<slug>.md is written for it. Never list the same type in both sections. -->
 
 ## Environments
 <bulleted list>
@@ -549,7 +560,7 @@ Read `<skill-dir>/templates/wiki/index.md.tmpl`. Placeholders and their values:
 - `{{STALE_SUFFIX}}` → empty for `init`; `refresh` populates if applicable
 - `{{OVERVIEW_PARAGRAPH}}` → the prose returned by Subagent D, dropped in verbatim
 - `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this fixed order: Lambdas, CLI tools, Packages, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`, `- [[packages]] — N packages`, etc. Omit any category that wasn't emitted. Do not add bullets for categories outside this set. If `REPO_SHAPE == go-other` and no categories were emitted, the section heading remains but the body is the single note from §3.1 about unrecognised shape.
-- `{{TECH_STACK_SECTION}}` → if any of `GO_VERSION` / `NODE_VERSION` / `TF_VERSION` / `AWS_PROVIDER_VERSION` is not `unknown`: emit `\n## Tech stack\n\n<Markdown table>\n` with one row per known version (Runtime, Terraform, AWS provider). Skip unknown rows. If all four are `unknown`, substitute the empty string — the heading is part of the placeholder so it disappears with the section.
+- `{{TECH_STACK_SECTION}}` → if any of `GO_VERSION` / `NODE_VERSION` / `TF_VERSION` / `AWS_PROVIDER_VERSION` is not `unknown`: emit `\n## Tech stack\n\n<Markdown table>\n`. **Table header is exactly `| Component | Version |`** (not "Runtime" — the table mixes runtimes with tooling). One row per known version: `Go`, `Node`, `Terraform`, `AWS provider`. The `Version` cell holds the **actual extracted value** (e.g. `1.24.0`, `>= 1.12.0`) — never a pointer like `(see infra/terraform.tf)`. If extraction failed for a given variable, omit that row entirely. If all four are `unknown`, substitute the empty string.
 - `{{TESTS_SECTION}}` → if `TEST_SUITES` non-empty: `\n## Tests\n\n<one paragraph naming the test suite directories>\n`. Else empty string.
 
 Never include a wikilink to a page that wasn't written.
