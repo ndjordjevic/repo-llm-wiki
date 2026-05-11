@@ -4,9 +4,11 @@
 > Sibling to [`pin-llm-wiki`](../../pin-llm-wiki/README.md) (which ingests external sources).
 > Scope: Phase 1 only. Phases 2–4 are referenced for context, not designed here.
 
-Status: draft 3 · Date: 2026-05-11 · Owner: nenad
+Status: draft 4 · Date: 2026-05-11 · Owner: nenad
 
-> **Draft-3 reset.** Draft 2 produced a v0.1 wiki on the validation repo and the result was too heavy: a `repo-map`, a `glossary`, an `architecture` page with a useless 40-node mermaid, and module clusters that lumped 8 lambdas into one page. Draft 3 pivots to a **drill-down** wiki: `index.md` → category page → per-item flow narrative. Source-file citations are dropped (broken in Obsidian); architecture/repo-map/glossary/overview pages are dropped. Analysis fans out across subagents. See §5 and §10 for the changes.
+> **Draft-4 amendment.** v0.2 of the skill (draft 3) let the agent "discover categories" from the repo content. On the validation repo this produced a `migrations.md` page that the agent invented from scratch — splitting Lambdas across `lambdas.md` and `migrations.md`, and splitting CLI tools across `cli.md` and `migrations.md` based on a name-prefix heuristic. The user rejected that: categories must be **type-driven, not theme-driven**. v0.3 locks the category set to exactly four: `lambdas`, `cli`, `scripts`, `infra`. Migration-related items live in `lambdas` (if they use `aws-lambda-go`) or `cli` (otherwise), tagged inline with `⚠ deprecated` where applicable. Lint E8 now errors on any other top-level category page.
+>
+> **Draft-3 reset (kept for context).** Draft 2 produced a v0.1 wiki on the validation repo and the result was too heavy: a `repo-map`, a `glossary`, an `architecture` page with a useless 40-node mermaid, and module clusters that lumped 8 lambdas into one page. Draft 3 pivoted to a **drill-down** wiki: `index.md` → category page → per-item flow narrative. Source-file citations were dropped (broken in Obsidian); architecture/repo-map/glossary/overview pages dropped. Analysis fans out across subagents.
 
 ---
 
@@ -62,18 +64,16 @@ Out-of-scope user: end customers / external API consumers. The wiki is internal.
 
 ### 5.2 What gets created
 
-The wiki is a **drill-down**. From `index.md` a reader picks a category, lands on a list, clicks an item, and reads a short flow narrative.
+The wiki is a **drill-down**. From `index.md` a reader picks a category, lands on a flat alphabetical list, clicks an item, and reads a short flow narrative.
 
 ```
 wiki/
   index.md                  # overview paragraph + category links + tech stack
-  lambdas.md                # list of Lambda entrypoints (if any)
+  lambdas.md                # flat list of every Lambda
   lambdas/<name>.md         # per-Lambda flow narrative (trigger → handler → service → store)
-  cli.md                    # list of CLI tools (if any)
-  cli/<name>.md
-  migrations.md             # list of migration scripts (if any); often grouped, no per-item pages
-  migrations/<name>.md      # only when an item warrants its own page
-  scripts.md                # build + utility scripts, grouped by purpose; CI workflows section
+  cli.md                    # flat list of every CLI tool
+  cli/<name>.md             # per-CLI flow narrative
+  scripts.md                # build + utility scripts grouped by purpose; CI workflows section
   infra.md                  # IaC repos: resources, environments, DynamoDB summary, …
   infra/<resource-type>.md  # split out per resource type when total > 15 or types > 3
   log.md                    # append-only generation history
@@ -81,6 +81,8 @@ wiki/
 
 AGENTS.md                   # created or extended; tells agents to read wiki/index.md first
 ```
+
+**Closed category set.** Top-level category pages are exactly four: `lambdas`, `cli`, `scripts`, `infra`. The skill MUST NOT invent new categories (no `migrations.md`, no `services.md`, no `tools.md`). Items are placed by **type**, not by theme: anything that uses `aws-lambda-go` is a Lambda; anything else under `cmd/` (or equivalent) is a CLI tool. Migration runners, tenant cleanup utilities, encryption helpers — all go into one of the two type-based categories, with `⚠ deprecated` tags where applicable. This is the single most important rule in v0.3 and is enforced by lint E8.
 
 **What is deliberately not generated**:
 - No `overview.md` — overview is the opening paragraph of `index.md`.

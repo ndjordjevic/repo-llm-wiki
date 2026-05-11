@@ -37,7 +37,7 @@ This is a stricter inversion of the v0.1 rule: file links used to be required, n
 For every `*.md` file directly under `wiki/` (excluding `log.md` and anything inside `.archive/`), check that `wiki/index.md` references it via `[[<slug>]]`. Record: `wiki/index.md: missing link to <slug>`.
 
 ### E6. Category–detail consistency
-For every detail page under `wiki/<category>/<slug>.md` (where `<category>` ∈ {`lambdas`, `cli`, `migrations`, `infra`}), check:
+For every detail page under `wiki/<category>/<slug>.md` (where `<category>` ∈ {`lambdas`, `cli`, `infra`}), check:
 - `wiki/<category>.md` exists, AND
 - `wiki/<category>.md` references the detail page via `[[<category>/<slug>]]`.
 
@@ -50,6 +50,20 @@ Record orphans both ways:
 
 ### E7. Empty pages
 For every `*.md` file under `wiki/`, check it has at least 50 non-whitespace characters of body (excluding the H1). Record: `<page>: page is effectively empty`. Empty pages indicate a generation failure.
+
+### E8. Unauthorised category page
+The v0.3 wiki has a **closed category set**: `lambdas`, `cli`, `scripts`, `infra` are the only permitted top-level category pages. Any other top-level `*.md` file or directory under `wiki/` (other than `index.md`, `log.md`, `.archive/`, `.obsidian/`) is an invented category.
+
+For each such file or directory, record: `wiki/<name>(.md)?: unauthorised category (only lambdas/cli/scripts/infra are permitted)`. Common violations: `migrations.md`, `services.md`, `tools.md`, `pipelines.md`, `runbook.md`.
+
+### E9. Lambda count consistency
+If both `wiki/lambdas.md` and `wiki/infra/lambda-functions.md` exist:
+- Count rows in `wiki/lambdas.md`'s main table (any row whose first cell is a name or a `[[wikilink]]`).
+- Count bulleted entries in the `## Resources` section of `wiki/infra/lambda-functions.md`.
+
+If the two counts differ, record: `wiki/lambdas.md: lists <N> Lambdas but infra/lambda-functions.md lists <M> Terraform Lambda modules — reconcile per the cross-listing rule`.
+
+This is a warning-level concern in practice but treated as an error because a missing Lambda row is the v0.2 wiki's most likely accuracy regression.
 
 ---
 

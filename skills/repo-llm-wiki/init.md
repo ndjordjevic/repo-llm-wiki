@@ -11,7 +11,7 @@ The wiki is **small and drill-down**. From `index.md` a reader picks a category 
 Hard rules that shape every step below:
 
 - **Only `[[wikilinks]]` between wiki pages.** No relative paths to source files (`../app/cmd/...`). Obsidian opens `wiki/` as the vault root and source-file paths resolve to nothing; that's why we drop them.
-- **Categories are discovered, not fixed.** A repo with no Terraform has no infrastructure section. A repo with no `cmd/` has no lambdas section. Never emit empty sections.
+- **Fixed category set. Do not invent categories.** The wiki has exactly four possible top-level categories: `lambdas`, `cli`, `scripts`, `infra`. A category page is emitted **only** when its source content exists in the repo; otherwise it is skipped. Never invent additional categories (no `migrations`, no `services`, no `tools`, no `pipelines`) — migration Lambdas go in `lambdas`, migration CLI tools go in `cli`, deprecated items are tagged inline within their natural category.
 - **One starting page only: `index.md`.** No separate `overview.md`, `architecture.md`, `repo-map.md`, or `glossary.md`. The overview paragraph lives in `index.md`.
 - **Per-item pages describe a flow, not files.** For a Lambda: who triggers it → what the handler does → what the service does → where data lands → response. 3–6 sentences. No file paths.
 
@@ -22,8 +22,10 @@ Hard rules that shape every step below:
 **Guard A** — if `wiki/index.md` already exists in the current working directory, **stop**:
 > "A wiki already exists here (`wiki/index.md` found). Run `/repo-llm-wiki refresh` to regenerate."
 
-**Guard B** — if `wiki/` exists with content but no `wiki/index.md`, **stop**:
-> "A `wiki/` directory exists with N file(s) but no `index.md`. Move or remove it before running `/repo-llm-wiki init`."
+**Guard B** — if `wiki/` exists and contains **wiki content** but no `wiki/index.md`, **stop**:
+> "A `wiki/` directory exists with N wiki file(s) but no `index.md`. Move or remove it before running `/repo-llm-wiki init`."
+
+"Wiki content" means: any `*.md` file anywhere under `wiki/` (other than `wiki/index.md` itself), OR any non-empty subdirectory other than the tool/meta dirs `.obsidian/`, `.archive/`, `.git/`. Pre-existing Obsidian vault config (`.obsidian/`), an empty `wiki/modules/`, or a pre-existing `wiki/.archive/` are **not** wiki content — proceed without stopping. If unsure, list what's present and ask before proceeding.
 
 **Guard C** — verify we're inside a git working tree:
 ```bash
@@ -132,7 +134,7 @@ Each subagent prompt must be self-contained: it has no view of this conversation
 
 **Per-entry investigation** (cap reads at 200 lines each):
 1. Read `<dir>/main.go` (or first `*.go`).
-2. Classify: contains `aws-lambda-go` import or `lambda.Start(` call → **Lambda**. Otherwise → **CLI tool** (or **Migration script** if name matches `migration*`, `*Migration*`, `pfb*`, `basiq*`).
+2. Classify into **exactly two types**: contains `aws-lambda-go` import or `lambda.Start(` call → **Lambda**. Otherwise → **CLI tool**. There is no "Migration script" type — a migration runner that uses `lambda.Start` is a Lambda, one that has a plain `main()` is a CLI tool. Whether something is migration-related is captured by the `deprecated` flag and by naming, not by a separate category.
 3. From the imports in main.go, identify the primary `internal/handler/<X>` and `internal/service/<Y>` packages used.
 4. Read **one** handler file under that handler package and **one** service file under that service package (first `*.go` not ending `_test.go`), capped at 200 lines.
 5. Note what the service does at a high level (writes to DynamoDB? calls another service? publishes to SQS? returns data?).
@@ -141,13 +143,14 @@ Each subagent prompt must be self-contained: it has no view of this conversation
 ```
 {
   "name": "amendArrangement",
-  "type": "Lambda",
+  "type": "Lambda",              // exactly one of: "Lambda", "CLI tool"
   "deprecated": false,           // true if dir name ends _old / _v1 / _legacy
-  "trigger": "API Gateway",      // or "EventBridge schedule", "SQS message", "CLI invocation", "unknown"
-  "flow": "Triggered by API Gateway. The handler parses and validates the amend-arrangement request, then calls the authorisation service which updates the existing arrangement record in DynamoDB. Returns the updated arrangement to the caller.",
-  "category_hint": "lambdas"     // one of: lambdas, cli, migration
+  "trigger": "API Gateway",      // for Lambdas: "API Gateway" | "EventBridge schedule" | "SQS message" | "DynamoDB Streams" | "S3" | "Step Functions" | "unknown". For CLI tools: "CLI invocation".
+  "flow": "Triggered by API Gateway. The handler parses and validates the amend-arrangement request, then calls the authorisation service which updates the existing arrangement record in DynamoDB. Returns the updated arrangement to the caller."
 }
 ```
+
+**No `category_hint` field.** Type drives placement: `Lambda` → `wiki/lambdas/`, `CLI tool` → `wiki/cli/`. Do not suggest other categories.
 
 **Trigger inference rules** (subagent applies, in order):
 - `aws-lambda-go/events.APIGatewayProxyRequest` in handler → `API Gateway`
@@ -217,19 +220,26 @@ Synthesize what the repo actually *does* in plain language. Identify the domain 
 
 After subagents return, the main agent decides which pages to emit. **Emit no empty sections, no empty pages.**
 
-### 3.1 Categories present
+### 3.1 The four categories (fixed)
 
-For each of the following, emit the category only if there is non-zero content:
+The category set is **closed**. The skill emits at most these four top-level pages, in this order on the index. Do not introduce others.
 
-| Category | Page | Condition |
+| Category | Page | Emit when |
 |---|---|---|
 | Lambdas | `wiki/lambdas.md` + `wiki/lambdas/<slug>.md` per item | at least one Subagent A item with `type=Lambda` |
-| CLI tools | `wiki/cli.md` + `wiki/cli/<slug>.md` per item | at least one with `type=CLI tool` |
-| Migration scripts | `wiki/migrations.md` + `wiki/migrations/<slug>.md` per item | at least one with `type=Migration script`. **Group instead of per-item page** if ≥6 items share the same name prefix and similar flow — list them on the category page with a one-line description each; no detail pages. |
-| Build / utility scripts | `wiki/scripts.md` | Subagent C returned at least one group |
+| CLI tools | `wiki/cli.md` + `wiki/cli/<slug>.md` per item | at least one Subagent A item with `type=CLI tool` |
+| Scripts | `wiki/scripts.md` | Subagent C returned at least one script group, **or** `WORKFLOW_FILES` is non-empty |
 | Infrastructure | see §3.2 | `AWS_RESOURCE_TOTAL > 0` |
-| Workflows | one line per file inside `wiki/scripts.md` under a `## CI workflows` heading | `WORKFLOW_FILES` non-empty |
-| Tests | one paragraph inside `index.md` under a `## Tests` heading | `TEST_SUITES` non-empty |
+
+CI workflows live as a `## CI workflows` subsection inside `wiki/scripts.md` — not a category. Tests, if present, live as a `## Tests` paragraph inside `wiki/index.md` — also not a category.
+
+**Items with `deprecated=true`** (e.g. `pfbToAMSMigration_old`, `basiqToPireanMigration_old`) stay in their natural category (`lambdas` if `type=Lambda`, `cli` otherwise) but are tagged `⚠ deprecated` in the row and in the detail page header. Do not segregate them into a separate page.
+
+**No detail-page grouping rule.** Every Lambda gets its own detail page. Every CLI tool gets its own detail page. The v0.2.0 rule that allowed inlining ≥6 prefix-sharing items is removed — it was the source of the "lambdas hiding in migrations.md" failure.
+
+### 3.1.1 Lambda-count consistency
+
+The count in `lambdas.md`'s opening sentence and any count in the overview paragraph must equal `len({items where type=Lambda})`. If Subagent D's overview prose mentions a different count — typically because it counted Terraform `aws_lambda_function` modules — reconcile by trusting the Terraform count (from Subagent B) and updating both `lambdas.md` and the overview to match. If the discrepancy is real (e.g. cmd-based count says 23 but Terraform deploys 26 because 3 Lambdas are sourced from outside `cmd/`), state it once on `lambdas.md`: "23 Lambdas built from `cmd/`; Terraform deploys 26 — see [[infra/lambda-functions]]."
 
 ### 3.2 Infrastructure split rule
 
@@ -247,7 +257,6 @@ mkdir -p wiki
 # Create sub-directories only when their category will be emitted:
 #   mkdir -p wiki/lambdas
 #   mkdir -p wiki/cli
-#   mkdir -p wiki/migrations
 #   mkdir -p wiki/infra
 ```
 
@@ -276,7 +285,9 @@ This repo deploys <N> AWS Lambda functions. Click into each for what it does.
 
 The "what it does (1 line)" column is the first sentence of the subagent's flow narrative, truncated to ~80 chars. Sort alphabetically.
 
-**`wiki/cli.md`** and **`wiki/migrations.md`**: same structure, with `Invocation` instead of `Trigger` where appropriate.
+**`wiki/cli.md`**: same structure as `lambdas.md`, with the `Trigger` column relabeled `Invocation`.
+
+**Category pages are flat tables.** Do not introduce subsections grouping items by purpose, by deprecation, by pipeline stage, or any other axis. A single table per category page, sorted alphabetically. The `Type` (for Lambdas, this means trigger; for CLI tools, "CLI invocation") and `⚠ deprecated` tag in the name column carry all the categorisation a reader needs. Subsections are how the previous version drifted into inventing categories — they're banned here.
 
 **`wiki/scripts.md`** (template):
 ```markdown
@@ -297,7 +308,7 @@ The "what it does (1 line)" column is the first sentence of the subagent's flow 
 
 ### 5.2 Per-item detail pages
 
-Write `wiki/lambdas/<name>.md` (and equivalents under `cli/`, `migrations/`) for every item that has its own page. **Slug = item name verbatim** (preserve case from `CMD_DIRS`).
+Write `wiki/lambdas/<name>.md` for every `type=Lambda` item and `wiki/cli/<name>.md` for every `type=CLI tool` item. **Every item gets a detail page** — no inline grouping, no shortcuts. **Slug = item name verbatim** (preserve case from `CMD_DIRS`).
 
 **Hard rule, re-stated for the writer**: the body of a detail page contains **no relative paths to source files**. No `../app/...`, no `[handler.go](../...)`. Refer to handlers and services by their conceptual role ("the handler", "the authorisation service"), not by file path. Lint E2 fails the wiki otherwise. If the subagent's flow narrative contains such a path, strip it before writing.
 
@@ -383,7 +394,7 @@ Read `<skill-dir>/templates/wiki/log.md.tmpl`. Substitute:
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{BRANCH}}` → `REPO_BRANCH`
 - `{{PAGE_COUNT}}` → write `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` recursively and `sed -i` (or equivalent) to replace `__PAGE_COUNT__`.
-- `{{TOOL_VERSION}}` → `0.2.0`
+- `{{TOOL_VERSION}}` → `0.3.0`
 
 ### 5.5 `wiki/index.md` (last)
 
@@ -396,7 +407,7 @@ Read `<skill-dir>/templates/wiki/index.md.tmpl`. Placeholders and their values:
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{STALE_SUFFIX}}` → empty for `init`; `refresh` populates if applicable
 - `{{OVERVIEW_PARAGRAPH}}` → the prose returned by Subagent D, dropped in verbatim
-- `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this order: Lambdas, CLI tools, Migration scripts, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`. Omit any category that wasn't emitted.
+- `{{CATEGORY_LINKS}}` → one bullet per emitted category, in this fixed order: Lambdas, CLI tools, Scripts, Infrastructure. Format: `- [[lambdas]] — N Lambda functions`. Omit any category that wasn't emitted. Do not add bullets for categories outside this set.
 - `{{TECH_STACK_SECTION}}` → if any of `GO_VERSION` / `NODE_VERSION` / `TF_VERSION` / `AWS_PROVIDER_VERSION` is not `unknown`: emit `\n## Tech stack\n\n<Markdown table>\n` with one row per known version (Runtime, Terraform, AWS provider). Skip unknown rows. If all four are `unknown`, substitute the empty string — the heading is part of the placeholder so it disappears with the section.
 - `{{TESTS_SECTION}}` → if `TEST_SUITES` non-empty: `\n## Tests\n\n<one paragraph naming the test suite directories>\n`. Else empty string.
 
@@ -422,7 +433,6 @@ Wiki generated in wiki/ (<PAGES_WRITTEN_COUNT> pages)
   wiki/index.md          ← start here
   wiki/lambdas.md        (+ <N> detail pages)
   wiki/cli.md            (+ <N> detail pages)
-  wiki/migrations.md     (+ <N> detail pages)
   wiki/scripts.md
   wiki/infra.md          (+ <N> detail pages, if split)
   wiki/log.md

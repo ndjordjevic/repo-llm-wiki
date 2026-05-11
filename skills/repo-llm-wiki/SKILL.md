@@ -1,7 +1,7 @@
 ---
 name: repo-llm-wiki
 description: "Generates a committable Markdown wiki from the repo it lives in — invoke with /repo-llm-wiki"
-version: "0.2.0"
+version: "0.3.0"
 last_updated: "2026-05-11"
 
 compatible_agents:
