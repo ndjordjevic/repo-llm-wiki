@@ -156,11 +156,9 @@ ls wiki/infra/*.md   2>/dev/null   # → INFRA_SLUGS
 ```
 
 For each slug `<S>` in `LAMBDA_SLUGS`, the page `wiki/lambdas/<S>.md` claims:
-- `cmd/<S>/**`
-- `app/cmd/<S>/**`
-- `app/internal/handler/<S>/**`
-- `app/internal/service/<S>/**`
-- `internal/handler/<S>/**`, `internal/service/<S>/**`
+- `cmd/<S>/**`, `app/cmd/<S>/**`
+- `internal/handler/<S>/**`, `app/internal/handler/<S>/**`
+- `internal/service/<S>/**`, `app/internal/service/<S>/**`
 
 Same pattern for `CLI_SLUGS` → `wiki/cli/<S>.md`.
 
@@ -200,25 +198,32 @@ For each file in `CHANGED_FILES`:
 | `*.sh` at repo root, `Makefile`, `.github/workflows/**` | `wiki/scripts.md` |
 | Anything else | unmatched |
 
-**Step 4d — New top-level entries (story DOES create their detail pages).**
+**Step 4d — New top-level entries.**
 
-If `CHANGED_FILES` adds a brand-new `cmd/<X>/`, `app/cmd/<X>/`, or top-level package dir with **no matching detail page** in the wiki, treat it as a `NEW_ENTRY`. Story handles new entries by *creating a fresh detail page for each* and threading it into all the dependent pages — mirroring what `init` does for that slice. The dev finishes with a wiki that already reflects their change; `refresh` is not required after a normal `story`.
+If `CHANGED_FILES` adds a brand-new `cmd/<X>/`, `app/cmd/<X>/`, or top-level package dir with **no matching detail page** in the wiki, treat it as a `NEW_ENTRY`. Story creates the detail page and threads it through all dependent pages in the same run — `refresh` is not required after.
 
-For every `NEW_ENTRY`:
+For every `NEW_ENTRY`, record:
+- `name` — cmd-dir name (e.g. `latestAuthorisations`)
+- `category` — `lambdas` | `cli` | `packages`
+- `source_root` — e.g. `app/cmd/latestAuthorisations/`
+- `infra_module_name` (Lambdas only) — derive from the Terraform diff (`identifier = "..."` field) or kebab-case the name as fallback
 
-1. **Record it** under `NEW_ENTRIES` with: `name` (cmd-dir name, e.g. `latestAuthorisations`), `category` (`lambdas` | `cli` | `packages`), `source_root` (e.g. `app/cmd/latestAuthorisations/`), and (if applicable) `infra_module_name` (e.g. `latest-authorisations` — derive from Terraform changes or by kebab-casing the slug if unknown).
-2. **Schedule a NEW-DETAIL subagent** for it (see Step 5 — Subagent A-style source reader). This subagent will read the entry's source files and return a flow narrative.
-3. **Add the parent list page** (`wiki/lambdas.md` / `wiki/cli.md` / `wiki/packages.md`) to `AFFECTED_PAGES` with role `list-page-with-adds`.
-4. **Add the E9-counterpart infra pages** for Lambda entries: `wiki/infra/lambdas.md` (bullet addition) and `wiki/infra.md` (Lambda count bump). For CLI / package entries, no infra counterpart.
-5. **Add `wiki/index.md`** to `AFFECTED_PAGES` with role `index-with-count-bump` — only the `## Categories` count for the affected category needs updating (e.g. `[[lambdas]] — 24 Lambda functions`).
-6. **Add the new entry's source files** to the diff-hunk set for the NEW-DETAIL subagent only (not for list-page subagents — they only need the slug and a 1-line description, not full hunks).
+Then schedule the following work (executed in Steps 5 and 7):
 
-**Why the design change**: the previous version of this step suppressed list-page updates and waited for `refresh`. In practice that confuses the dev (they see "story ran" but the wiki count is wrong), and it forces a second invocation. Doing the work inline is the obvious user model. The risk — that the NEW-DETAIL subagent produces a worse page than `refresh`'s full-context Subagent A would — is mitigated by giving the NEW-DETAIL subagent the same prompt and inputs as init §3 Subagent A for that one entry.
+| Action | Page | Role |
+|---|---|---|
+| Spawn NEW-DETAIL subagent → write detail page | `wiki/<category>/<name>.md` | created in Step 5 |
+| Insert wikilink row + bump headline count | `wiki/<category>.md` (list page) | `list-page-with-adds` |
+| Add bullet + bump count (Lambdas only) | `wiki/infra/lambdas.md` | `infra-inventory` |
+| Bump Lambda count (Lambdas only) | `wiki/infra.md` | `infra-inventory` |
+| Bump Categories count + overview prose count | `wiki/index.md` | `index-with-count-bump` |
 
-**Non-Lambda infra changes** (e.g. new DynamoDB GSI on an existing table, new SQS queue, environment additions) update normally — those route via the fallback table to existing infra pages and don't need a NEW-DETAIL subagent.
+For CLI / package NEW_ENTRIES: no infra-side pages — only the detail page, list page, and `wiki/index.md` are touched.
 
-**Large-page-set guard.** If `AFFECTED_PAGES` (after applying 4d) exceeds 6 pages, print:
-> "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
+For non-Lambda infra changes (new DynamoDB GSI on an existing table, new SQS queue, environment additions): no NEW_ENTRY — route via the fallback table to existing infra pages.
+
+**Large-page-set guard.** If `AFFECTED_PAGES` exceeds 6 pages, print and ask to confirm:
+> "This story affects <N> wiki pages. That's broad for `story` — consider `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
 
 ---
 
@@ -361,7 +366,7 @@ Read `wiki/log.md`. After the `# Generation log` heading (and any blank line), i
 - Files changed: <FILE_COUNT> (<LINES_ADDED>+/<LINES_REMOVED>-)
 - Pages updated: <comma-separated list of updated page paths>
 - Summary: <AUTO_SUMMARY>
-- Tool: repo-llm-wiki v<TOOL_VERSION>
+- Tool: repo-llm-wiki v0.5.0
 ```
 
 `TIMESTAMP` format: `YYYY-MM-DD HH:MM UTC`.
@@ -374,40 +379,41 @@ Preserve all prior entries below verbatim.
 
 ## Verification block (run before printing completion summary)
 
-If `NEW_ENTRIES` is non-empty, execute the following checks. Any failure means you skipped a required action — STOP and complete it before printing the completion summary.
+If `NEW_ENTRIES` is non-empty, execute the following checks from the repo root. Any failure means you skipped a required action — STOP, complete it, and re-run.
 
 ```bash
-cd <repo-root>
 HALT=0
-for NAME in <NEW_ENTRY names>; do
-  # 1. Detail page must exist
-  test -f "wiki/lambdas/$NAME.md" || test -f "wiki/cli/$NAME.md" || test -f "wiki/packages/$NAME.md" \
-    || { echo "❌ FAIL: detail page wiki/<category>/$NAME.md was not created"; HALT=1; }
-  # 2. List page must contain the new wikilink
-  grep -q "\[\[lambdas/$NAME\]\]\|\[\[cli/$NAME\]\]\|\[\[packages/$NAME\]\]" wiki/lambdas.md wiki/cli.md wiki/packages.md 2>/dev/null \
-    || { echo "❌ FAIL: list page does not link [[<category>/$NAME]]"; HALT=1; }
+
+# Per-entry: detail page exists; parent list page links to it
+for ENTRY in <name1:category1> <name2:category2> ...; do
+  NAME=${ENTRY%:*}
+  CAT=${ENTRY#*:}
+  test -f "wiki/$CAT/$NAME.md" \
+    || { echo "❌ detail page wiki/$CAT/$NAME.md missing"; HALT=1; }
+  grep -q "\[\[$CAT/$NAME\]\]" "wiki/$CAT.md" 2>/dev/null \
+    || { echo "❌ wiki/$CAT.md does not link [[$CAT/$NAME]]"; HALT=1; }
 done
 
-# 3. Count parity (Lambda case)
-LAMBDA_WIKILINKS=$(grep -c '^| \[\[lambdas/' wiki/lambdas.md 2>/dev/null)
-INFRA_BULLETS=$(grep -c '^- ' wiki/infra/lambdas.md 2>/dev/null)
-if [ "$LAMBDA_WIKILINKS" != "$INFRA_BULLETS" ]; then
-  echo "❌ FAIL: wiki/lambdas.md has $LAMBDA_WIKILINKS wikilinks but wiki/infra/lambdas.md has $INFRA_BULLETS bullets"
-  HALT=1
-fi
+# Count parity per affected category (only when category has list+infra+index counts)
+for CAT in lambdas cli packages; do
+  test -f "wiki/$CAT.md" || continue
+  ROWS=$(grep -c "^| \[\[$CAT/" "wiki/$CAT.md")
+  IDX=$(grep -oE "\[\[$CAT\]\] — [0-9]+" wiki/index.md | grep -oE '[0-9]+')
+  [ -n "$IDX" ] && [ "$ROWS" != "$IDX" ] \
+    && { echo "❌ wiki/$CAT.md has $ROWS rows but wiki/index.md Categories says $IDX"; HALT=1; }
+  # Infra parity only for Lambdas (E9-governed)
+  if [ "$CAT" = "lambdas" ] && [ -f wiki/infra/lambdas.md ]; then
+    INFRA=$(grep -c '^- ' wiki/infra/lambdas.md)
+    [ "$ROWS" != "$INFRA" ] \
+      && { echo "❌ wiki/lambdas.md has $ROWS rows but wiki/infra/lambdas.md has $INFRA bullets"; HALT=1; }
+  fi
+done
 
-# 4. Index Categories bullet count must match
-INDEX_LAMBDA_COUNT=$(grep -oE '\[\[lambdas\]\] — [0-9]+' wiki/index.md | grep -oE '[0-9]+')
-if [ "$INDEX_LAMBDA_COUNT" != "$LAMBDA_WIKILINKS" ]; then
-  echo "❌ FAIL: wiki/index.md Categories says $INDEX_LAMBDA_COUNT Lambdas but wiki/lambdas.md has $LAMBDA_WIKILINKS"
-  HALT=1
-fi
-
-[ "$HALT" = "1" ] && echo "VERIFICATION FAILED — go back and complete the missing actions before reporting done"
+[ "$HALT" = "1" ] && echo "VERIFICATION FAILED — fix before printing completion summary" && exit 1
 [ "$HALT" = "0" ] && echo "✓ verification passed"
 ```
 
-If any check fails, do NOT proceed to the completion summary. Identify the missing action (likely from the §✅ checklist at the top of this file), complete it, and re-run the verification.
+If any check fails, do NOT proceed to the completion summary. Identify the missing action (see the ✅ checklist at the top of this file), complete it, and re-run.
 
 ---
 
@@ -441,15 +447,11 @@ If `NEW_ENTRIES` is non-empty, the "Created" block above already lists them. Do 
 
 | Case | Behaviour |
 |---|---|
-| No commits on branch yet (`FORK_SHA == HEAD_SHA`) | Use uncommitted diff only. Log SHA as `working tree`. |
-| Shallow clone / `merge-base` fails | Stop. Instruct dev to pass `--since <ref>`. |
+| `FORK_SHA == HEAD_SHA` (no commits on branch yet) | Use uncommitted diff only. Log SHA as `working tree`. |
+| Shallow clone / `merge-base` fails / `--since` ref not found | Stop. Surface the git error and suggest `git fetch` or pass `--since <ref>` explicitly. |
 | Detached HEAD | `BRANCH = (detached at <HEAD_SHA[0:7]>)`. Proceed. |
 | Only wiki files changed | Stop. *"Story touches only wiki/ — nothing to summarise."* |
-| File added that no page references | Try slug-derived routing (4a) first, then text-citation map (4b), then the fallback table (4c). If the file is under a brand-new `cmd/<X>/`, app/cmd/<X>/`, or top-level package, treat as a NEW_ENTRY (4d) and create a new detail page. Otherwise log as unmatched. |
 | File deleted that pages cite | Subagent for that page receives the deletion diff and must rewrite to remove dangling citations. |
-| `--since` ref invalid or not found | Let git error surface. Stop with the git error message. |
-| Description contains line-start `##` or pipe characters | Replace line-start `##` with `\#\#` and pipes with `\|` so the Markdown bullet stays well-formed. Inline backticks in the description are fine — leave them. |
-| Subagent returns a page with a broken wikilink | Write the page anyway; lint will catch it. Do not block the run. |
-| Branch adds a new Lambda / CLI / package | Detected as NEW_ENTRY in Step 4d. Story spawns a NEW-DETAIL subagent (Subagent A-style) to read source and produce flow narrative, writes `wiki/<category>/<name>.md` directly, then has the list-page subagent insert a wikilink row + bump the count. Index page count is also bumped. No `refresh` follow-up needed. |
-| NEW_ENTRY but `app/internal/handler/<name>/` does not exist (handler-less Lambda) | NEW-DETAIL subagent reads just `main.go` and produces a best-effort flow narrative using only that. If the narrative is < 200 chars (lint W3), it's still written — the dev can run `refresh` later for a richer pass. |
-| NEW_ENTRY is a CLI tool but Terraform module exists with similar name | The infra-counterpart steps in 4d apply only to Lambdas. For CLI NEW_ENTRIES, no infra page is added to AFFECTED_PAGES. |
+| Description contains line-start `##` or pipe characters | Replace line-start `##` with `\#\#` and pipes with `\|` so the Markdown bullet stays well-formed. Inline backticks are fine. |
+| NEW_ENTRY has no `app/internal/handler/<name>/` directory | NEW-DETAIL subagent reads `main.go` only and produces a best-effort flow narrative. If the page lands under 200 chars (lint W3), it's still written — the dev can run `refresh` for a richer pass. |
+| Subagent output contains a broken wikilink | Write the page anyway; the verification block + `lint` will catch it. |

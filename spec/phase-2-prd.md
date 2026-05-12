@@ -17,10 +17,12 @@ A diff-aware update path the dev runs themselves at the natural moment — when 
 **In:**
 
 - New subcommand `/repo-llm-wiki story "<description>"`.
-- Reads `git status` + `git diff` (working tree + staged + optional base-branch compare).
-- Identifies which wiki pages are affected by the touched files.
-- Updates only those pages (overwrites the affected sections, not whole files).
-- Prepends an entry to `wiki/log.md` capturing the dev description + brief auto-summary of changes.
+- Reads the full branch diff (committed since fork-point + uncommitted working tree).
+- Identifies affected wiki pages via slug-derived reverse routing + text-citation fallback.
+- Updates affected pages in place (overwrites with subagent-regenerated content).
+- **Creates new detail pages inline** for new top-level entries (new `cmd/<X>/`, top-level packages) so the wiki is fully consistent with the code at the end of one run — no `refresh` follow-up required.
+- Threads new entries through list pages, infra inventory (`infra/lambdas.md`), `infra.md`, and `index.md` with bumped counts.
+- Prepends an entry to `wiki/log.md` with the dev description + auto-generated factual summary.
 
 **Out (deferred):**
 
@@ -68,9 +70,11 @@ Fallback when a touched file matches no page: route by directory prefix to the c
 
 ### 5.4 Per-page update
 
-- Affected pages are regenerated **in place** by the same subagent pattern as `init` §3 — but each subagent receives only the page's prior content, the relevant diff hunks, and the dev description, and returns a full new page body.
-- Citations must be re-validated (no dangling file refs).
-- `wiki/index.md` is updated only if a page was added or removed (rare in Phase 2).
+- Affected pages are regenerated **in place** by the same subagent pattern as `init` §3 — each subagent receives only the page's prior content, the relevant diff hunks, the dev description, and a role-specific instruction (list-page / infra-inventory / detail-page / index-with-count-bump / prose).
+- For NEW_ENTRIES, a separate NEW-DETAIL subagent (Subagent A-style from `init.md` §3) reads the new entry's source files and produces a flow narrative; the main agent writes the fresh detail page using the `init.md` §5.2 template.
+- List-page subagents insert wikilink rows for new entries and bump every count reference on the page.
+- `wiki/index.md` is included in `AFFECTED_PAGES` whenever there are NEW_ENTRIES — both the `## Categories` bullet count and the overview-paragraph prose count are bumped.
+- A verification block runs before completion summary: detail page exists, list page links to it, count parity across `lambdas.md` / `infra/lambdas.md` / `index.md`.
 
 ### 5.5 Log entry
 
@@ -108,9 +112,10 @@ Inherits Phase 1's canonical rule (`SKILL.md`): never commit or push. `story` wr
 
 ## 7. Success criteria
 
-- A dev who runs `story` after a feature lands gets <30s wall time and ≤3 pages touched for a typical change.
+- A dev who runs `story` after a feature lands gets ≤5 pages touched for a typical single-entry change (one new Lambda → list + 2 infra + index + new detail page).
+- Wiki is fully consistent with code at the end of one `story` run — `lint` passes (E1 wikilinks resolve, E9 count parity holds across all four count-bearing pages).
 - The resulting log entries are skim-readable: a new joiner can scroll `wiki/log.md` and understand the project's last 20 changes without opening any other page.
-- `lint` passes after every `story` run on a healthy wiki.
+- The verification block catches missed actions before they reach the user — no silent "pending row" or "run refresh later" outputs.
 
 ## 8. Open questions
 

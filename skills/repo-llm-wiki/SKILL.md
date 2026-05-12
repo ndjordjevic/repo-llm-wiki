@@ -1,8 +1,8 @@
 ---
 name: repo-llm-wiki
 description: "Generates a committable Markdown wiki from the repo it lives in — invoke with /repo-llm-wiki"
-version: "0.4.0"
-last_updated: "2026-05-11"
+version: "0.5.0"
+last_updated: "2026-05-12"
 
 compatible_agents:
   tested:
@@ -78,7 +78,7 @@ No external models, no orchestration daemon. On hosts without a subagent primiti
    - **`refresh`** → `refresh.md`
    - **`lint`** → `lint.md`
    - **`story`** → `story.md`
-4. If the subcommand is missing or unrecognised, print and stop:
+3. If the subcommand is missing or unrecognised, print and stop:
    ```
    Usage: /repo-llm-wiki <subcommand>
      init                        — scaffold and generate a new wiki
@@ -86,7 +86,7 @@ No external models, no orchestration daemon. On hosts without a subagent primiti
      lint                        — validate wiki health
      story "<description>"       — update wiki from current branch changes
    ```
-5. Do not proceed beyond this dispatch step before reading the target file.
+4. Do not proceed beyond this dispatch step before reading the target file.
 
 ## Git policy (canonical)
 

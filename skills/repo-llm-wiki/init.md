@@ -546,7 +546,7 @@ Read `<skill-dir>/templates/wiki/log.md.tmpl`. Substitute:
 - `{{SHA}}` → first 7 chars of `REPO_SHA`
 - `{{BRANCH}}` → `REPO_BRANCH`
 - `{{PAGE_COUNT}}` → write `__PAGE_COUNT__` for now; after `index.md` is written, count all `*.md` files inside `wiki/` recursively and `sed -i` (or equivalent) to replace `__PAGE_COUNT__`.
-- `{{TOOL_VERSION}}` → `0.4.0`
+- `{{TOOL_VERSION}}` → `0.5.0`
 
 ### 5.5 `wiki/index.md` (last)
 

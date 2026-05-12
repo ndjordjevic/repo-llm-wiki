@@ -19,6 +19,14 @@ No template changes to page files — story regenerates existing pages in-place.
 
 ## 2. `story.md` outline
 
+**Note (2026-05-12):** the design landed differently from the original sketch below. The shipped `story.md` is structured as:
+
+- **Top-of-file `⛔ Forbidden behaviours` + `✅ Required actions for NEW_ENTRIES` callouts** — these proved necessary after the model repeatedly defaulted to a "pending row + run refresh later" pattern. Front-loading the checklist made the agent comply.
+- **Step 4d (NEW_ENTRIES)** creates fresh detail pages inline (NEW-DETAIL subagent → write `wiki/<category>/<name>.md` from `init.md` §5.2 template). It does **not** suppress list-page updates and defer to `refresh` as originally sketched.
+- **Verification block** (mechanical shell checks for detail-page existence, wikilink presence, count parity) runs before the completion summary. Without this, the agent sometimes skipped index updates or count bumps.
+
+The procedural outline below documents the original intent; the shipped procedure refines it as above.
+
 Mirror the structure of `refresh.md` (small, procedural). Sections:
 
 1. **Trigger & args.** Parse the description string. Reject if absent / <10 chars. Parse optional `--since <ref>`.
