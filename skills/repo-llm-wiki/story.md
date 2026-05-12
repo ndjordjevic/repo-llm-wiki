@@ -90,7 +90,12 @@ git diff --name-only HEAD                 # uncommitted staged/unstaged changes
 ```
 Merge and deduplicate → `CHANGED_FILES`.
 
-Exclude wiki-internal files: drop any path starting with `wiki/`.
+**Exclude wiki-tooling files** (these are not source code; they're the wiki's own scaffolding):
+- Any path starting with `wiki/`
+- `AGENTS.md` at the repo root (written by `init`)
+- `CLAUDE.md`, `.cursor/`, `.copilot/`, `.claude/` (host-agent config)
+
+These exclusions apply both to the change-mapping pass and to the "unmatched" report — don't print them as unmatched, they're handled.
 
 **Edge cases:**
 - If `FORK_SHA == HEAD_SHA`: only uncommitted changes are in scope. Use `git diff --name-only HEAD` only. Log SHA as `working tree`.
@@ -114,25 +119,75 @@ If `FILE_COUNT > 100`, print a warning and ask the user to confirm before contin
 
 ## Step 4 — Map changed files to wiki pages
 
-Build a `PATH→PAGES` index by scanning every `*.md` file under `wiki/` (exclude `wiki/log.md` and anything under `wiki/.archive/`) for file references. A file reference is any of:
-- A markdown link whose target does not start with `[[` and contains a `/` (i.e. a path-like string)
-- A backtick-quoted token containing a `/` that looks like a path (e.g. `` `cmd/amendArrangement/main.go` ``)
-- A Mermaid node label containing a path fragment
+Phase 1 wiki pages deliberately contain **no source-file citations** (see `init.md` design intent). So the routing here is driven primarily by a **slug-derived reverse map** built from the wiki's existing structure, with text-citation scanning as a secondary signal.
 
-For each changed file in `CHANGED_FILES`, look it up in the index (exact match, then longest-prefix match on directory).
+**Step 4a — Build the slug-derived reverse map.**
 
-**Fallback routing** for files that match no wiki page. Phase 1's category set is closed: only `lambdas`, `cli`, `packages`, `scripts`, `infra`. Route by file path:
+Enumerate existing detail pages, then claim source paths from each slug:
+
+```bash
+ls wiki/lambdas/*.md 2>/dev/null   # → LAMBDA_SLUGS (strip dir + .md extension)
+ls wiki/cli/*.md     2>/dev/null   # → CLI_SLUGS
+ls wiki/packages/*.md 2>/dev/null  # → PACKAGE_SLUGS
+ls wiki/infra/*.md   2>/dev/null   # → INFRA_SLUGS
+```
+
+For each slug `<S>` in `LAMBDA_SLUGS`, the page `wiki/lambdas/<S>.md` claims:
+- `cmd/<S>/**`
+- `app/cmd/<S>/**`
+- `app/internal/handler/<S>/**`
+- `app/internal/service/<S>/**`
+- `internal/handler/<S>/**`, `internal/service/<S>/**`
+
+Same pattern for `CLI_SLUGS` → `wiki/cli/<S>.md`.
+
+For each slug `<S>` in `PACKAGE_SLUGS`, the page `wiki/packages/<S>.md` claims:
+- `<S>/**` (top-level package dir)
+
+For each slug `<S>` in `INFRA_SLUGS`, the page `wiki/infra/<S>.md` claims the resource-type `.tf` file when the slug matches conventionally:
+- `wiki/infra/lambdas.md` claims `infra/lambda.tf`, `infra/api-gateway.tf`, `infra/locals.tf` (lambda wiring)
+- `wiki/infra/dynamodb-tables.md` claims `infra/dynamodb.tf`
+- generally `wiki/infra/<S>.md` claims `infra/<slug-singular>.tf` (best-effort name match)
+
+**Step 4b — Build the text-citation map (secondary).**
+
+Scan every `*.md` file under `wiki/` (exclude `wiki/log.md` and anything under `wiki/.archive/`) for explicit file references:
+- A backtick-quoted token containing a `/` that looks like a path (e.g. `` `infra/dynamodb.tf` ``)
+- Markdown links whose target contains a `/` and an extension
+
+Add these to the `PATH→PAGES` index built in 4a.
+
+**Step 4c — Route each changed file.**
+
+For each file in `CHANGED_FILES`:
+1. Exact match in the index → assign to that page set.
+2. Longest-prefix directory match in the index → assign.
+3. Fallback table below.
+4. None of the above → unmatched.
+
+**Fallback table** (consulted only after 4a/4b miss):
 
 | Changed file path | Routes to |
 |---|---|
-| `cmd/<X>/...`, `app/cmd/<X>/...` (under a dir that has a detail page) | `wiki/lambdas/<X>.md` or `wiki/cli/<X>.md` (whichever detail page exists) |
-| `cmd/<X>/...`, `app/cmd/<X>/...` (no detail page exists) | `wiki/lambdas.md` (will be flagged unmatched if subagent can't place it; new entrypoints need `refresh`) |
-| `infra/**/*.tf`, `infra/**/*.tfvars` | `wiki/infra.md` (and any matching `wiki/infra/<slug>.md` per citations) |
+| `cmd/<X>/**`, `app/cmd/<X>/**` where no `wiki/lambdas/<X>.md` or `wiki/cli/<X>.md` exists | **NEW ENTRY** — see Step 4d below |
+| `app/internal/handler/<X>/**` or `app/internal/service/<X>/**` where no `wiki/lambdas/<X>.md` exists | NEW ENTRY (handler/service for an unwritten Lambda) — see 4d |
+| `app/internal/model/**`, `app/internal/mapper/**`, `app/internal/mock/**`, other shared `internal/` paths | log as **shared-internal** (expected unmatched; no single page owns these) |
+| `infra/**/*.tf`, `infra/**/*.tfvars` not claimed by 4a | `wiki/infra.md` |
+| `infra/swaggers/**`, `infra/openapi/**`, `*.openapi.yaml` | `wiki/infra.md` (API Gateway shape) |
 | `*.sh` at repo root, `Makefile`, `.github/workflows/**` | `wiki/scripts.md` |
-| Top-level Go package directories with citations on a packages page | `wiki/packages/<slug>.md` |
-| Anything else | log as unmatched in the completion summary; do not invent a routing target |
+| Anything else | unmatched |
 
-**Story does not create new top-level pages.** If the dev's branch adds a new Lambda entrypoint or a new top-level package, story will route its files to the closest existing page if possible and flag them as unmatched otherwise. New detail pages require a `refresh` run. Note this in the completion summary when unmatched > 0 so the dev knows.
+**Step 4d — New top-level entries.**
+
+If `CHANGED_FILES` adds a brand-new `cmd/<X>/` or `app/cmd/<X>/` with no matching detail page in the wiki, **do not invent a list-page row** for it. Phase 1's category list pages are wikilink tables; adding a non-wikilink row breaks lint E9 (count parity vs `infra/lambdas.md`).
+
+Instead:
+- Do not add the new entry's files to any page's update set.
+- Record the entry's name and route under `NEW_ENTRIES` (separate from `unmatched`).
+- The completion summary will surface a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
+
+**Large-page-set guard.** If `AFFECTED_PAGES` exceeds 6 pages, print:
+> "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
 
 **Large-page-set guard:**
 If the resulting `AFFECTED_PAGES` set has more than 6 pages, print:
@@ -218,12 +273,26 @@ Wiki story logged (<N> pages updated)
 Description: <DEV_DESCRIPTION>
 SHA: <HEAD_SHA[0:7]>  Branch: <BRANCH>
 Files: <FILE_COUNT> (<LINES_ADDED>+/<LINES_REMOVED>-)
+Shared internal: <count>  (expected — no single page owns these)
 Unmatched files: <count>  (not covered by any wiki page)
+New top-level entries: <count>
 
 Run /repo-llm-wiki lint to validate.
 ```
 
-If `unmatched files > 0`, list the unmatched paths below the summary so the dev can spot-check.
+If `unmatched > 0` or `shared-internal > 0`, list those paths below the summary so the dev can spot-check.
+
+If `NEW_ENTRIES` is non-empty, append a loud block:
+
+```
+⚠ NEW TOP-LEVEL ENTRIES DETECTED
+
+These additions need a structural wiki update — story does not create new detail pages or list-page rows:
+
+  - <entry name> (category: lambdas | cli | packages) — <source path>
+
+Run /repo-llm-wiki refresh to generate the missing detail pages and update the category list. Lint may report E1/E9/E5 until refresh runs.
+```
 
 ---
 
