@@ -185,12 +185,13 @@ For every `NEW_ENTRY`:
 
 1. **Discard all files under that entry from routing.** Do not add `cmd/<X>/**`, `app/cmd/<X>/**`, `app/internal/handler/<X>/**`, `app/internal/service/<X>/**` to any page's diff-hunk set.
 2. **Do not add `wiki/lambdas.md` / `wiki/cli.md` / `wiki/packages.md` to `AFFECTED_PAGES` solely because of a `NEW_ENTRY`.** A list page is only in `AFFECTED_PAGES` when an *existing* row's detail page has changed.
-3. **Record** the entry under `NEW_ENTRIES` with its kind (Lambda / CLI / package) and source path.
-4. The completion summary surfaces a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
+3. **For Lambda NEW_ENTRIES specifically: also suppress E9-governed counterpart pages.** Strip the new entry's Terraform module name (e.g. `latest-authorisations`) from any diff hunks routed to `wiki/infra/lambdas.md`, and instruct that subagent **not to add a bullet** for it. Likewise, do not update the Lambda count reference (`"24 Lambda functions"`) on `wiki/infra.md` — keep the prior count. This keeps lint E9 passing between `story` and `refresh`.
+4. **Record** the entry under `NEW_ENTRIES` with its kind (Lambda / CLI / package), source path, and (if Lambda) Terraform module name.
+5. The completion summary surfaces a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
 
-**Reasoning for the main agent:** a new Lambda does *not* by itself justify updating `wiki/lambdas.md`. The list page is a wikilink table; the row can only be added once the detail page exists, and only `refresh` creates detail pages. Story is read-only on the list page until a `refresh` runs.
+**Reasoning for the main agent:** a new Lambda does *not* by itself justify updating any of the three E9-governed pages (`wiki/lambdas.md`, `wiki/infra/lambdas.md`, `wiki/infra.md`'s Lambda count). The wiki keeps a consistent pre-refresh view: 23 documented Lambdas across all three pages, with a "1 pending" notice in the completion summary. Once the user runs `refresh`, all three pages move to 24 atomically.
 
-The Terraform side (`infra/<resource>.md`) is the *one exception*: those are flat inventory bullets, and adding `latest-authorisations` to `infra/lambdas.md` is fine because it's a deployed resource name, not a wikilink.
+For non-Lambda infra changes (e.g. a new DynamoDB GSI on an existing table, a new SQS queue, environment additions), update normally — those aren't E9-governed.
 
 **Large-page-set guard.** If `AFFECTED_PAGES` (after applying 4d) exceeds 6 pages, print:
 > "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
@@ -239,6 +240,14 @@ Each subagent prompt must be self-contained (no view of this conversation). Incl
 **Additional instruction for INFRA INVENTORY pages** (append to base):
 
 > This page is a flat resource inventory. Adding bullets / table rows for new deployed resources (e.g. a new Terraform module) is fine — the inventory does not require wikilinks. Keep the alphabetical or original ordering of the existing list.
+
+**Additional instruction for `wiki/infra/lambdas.md` specifically, when the run has Lambda NEW_ENTRIES** (append to INFRA INVENTORY block):
+
+> **DO NOT add a bullet for any of the following Lambda names, even if they appear in the diff: `<NEW_LAMBDA_MODULE_NAMES>`.** These are new Lambdas without runtime detail pages yet; adding them here would break lint E9 (count parity with `wiki/lambdas.md`). They will be added by the next `/repo-llm-wiki refresh`. You may still update bullet text or descriptions for *existing* Lambda names in the list.
+
+**Additional instruction for `wiki/infra.md`, when the run has Lambda NEW_ENTRIES** (append to INFRA INVENTORY block):
+
+> Do not change the Lambda count in any reference like "24 Lambda functions" or "[[infra/lambdas]] — N Lambda functions". The wiki keeps the prior count until `refresh` runs.
 
 **Additional instruction for DETAIL pages** (append to base):
 
