@@ -2,7 +2,30 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-`story` is a diff-aware, narrow update. It updates only the wiki pages affected by the current branch's changes — it does not regenerate the whole wiki. For new top-level entries (a new Lambda, CLI tool, or top-level package), story also creates the fresh detail page inline and threads it into the list page, infra inventory, and index, so the dev finishes with a consistent wiki without needing to run `refresh`.
+`story` is a diff-aware update. It updates pages affected by the current branch's changes, and **for every new top-level entry it creates the fresh detail page inline**.
+
+---
+
+## ⛔ Forbidden behaviours (read this first)
+
+If you find yourself about to do any of the following, STOP — you are misreading the instructions:
+
+1. **Never insert a "detail page pending — run /repo-llm-wiki refresh" row** into a list page. Story creates the detail page itself; there is no pending state.
+2. **Never insert a row into a list page without a `[[wikilink]]` target.** Every row in `wiki/lambdas.md`, `wiki/cli.md`, `wiki/packages.md` is a `[[wikilink]]` to a detail page that exists on disk.
+3. **Never tell the dev to "run /repo-llm-wiki refresh" to finish the work.** Story is self-contained for new entries. If you are tempted to write that line in the completion summary, you skipped Step 5.
+4. **Never bump a count on one page (e.g. `wiki/lambdas.md` headline → 24) without also bumping it on `wiki/index.md`, `wiki/infra.md`, and `wiki/infra/lambdas.md`.** Counts must be consistent across all four.
+
+## ✅ Required actions for NEW_ENTRIES (must all happen in one run)
+
+When the branch adds a brand-new `cmd/<X>/` or `app/cmd/<X>/` (call it a `NEW_ENTRY`), you MUST do all of the following before printing the completion summary:
+
+1. Spawn a NEW-DETAIL subagent (Step 5) that reads `main.go`, the handler, and one service file for `<X>`, returning a flow narrative.
+2. Write `wiki/lambdas/<X>.md` (or `wiki/cli/<X>.md`) using the detail-page template from `init.md` §5.2. **The file must exist on disk before Step 7 starts.**
+3. Include `wiki/lambdas.md` (or `cli.md`) in `AFFECTED_PAGES`. Its subagent inserts a `[[lambdas/<X>]]` wikilink row and bumps the headline count.
+4. Include `wiki/infra/lambdas.md` in `AFFECTED_PAGES`. Its subagent adds the Terraform-module-name bullet and bumps the count.
+5. Include `wiki/infra.md` in `AFFECTED_PAGES`. Its subagent bumps the Lambda count in `## Resource types`.
+6. Include `wiki/index.md` in `AFFECTED_PAGES`. Its subagent bumps the count in `## Categories` AND in the overview paragraph.
+7. Run the verification block (end of Step 9) before printing the completion summary.
 
 ---
 
@@ -346,6 +369,45 @@ Read `wiki/log.md`. After the `# Generation log` heading (and any blank line), i
 Escape any `##` or backtick characters in `DEV_DESCRIPTION` to avoid breaking the Markdown structure.
 
 Preserve all prior entries below verbatim.
+
+---
+
+## Verification block (run before printing completion summary)
+
+If `NEW_ENTRIES` is non-empty, execute the following checks. Any failure means you skipped a required action — STOP and complete it before printing the completion summary.
+
+```bash
+cd <repo-root>
+HALT=0
+for NAME in <NEW_ENTRY names>; do
+  # 1. Detail page must exist
+  test -f "wiki/lambdas/$NAME.md" || test -f "wiki/cli/$NAME.md" || test -f "wiki/packages/$NAME.md" \
+    || { echo "❌ FAIL: detail page wiki/<category>/$NAME.md was not created"; HALT=1; }
+  # 2. List page must contain the new wikilink
+  grep -q "\[\[lambdas/$NAME\]\]\|\[\[cli/$NAME\]\]\|\[\[packages/$NAME\]\]" wiki/lambdas.md wiki/cli.md wiki/packages.md 2>/dev/null \
+    || { echo "❌ FAIL: list page does not link [[<category>/$NAME]]"; HALT=1; }
+done
+
+# 3. Count parity (Lambda case)
+LAMBDA_WIKILINKS=$(grep -c '^| \[\[lambdas/' wiki/lambdas.md 2>/dev/null)
+INFRA_BULLETS=$(grep -c '^- ' wiki/infra/lambdas.md 2>/dev/null)
+if [ "$LAMBDA_WIKILINKS" != "$INFRA_BULLETS" ]; then
+  echo "❌ FAIL: wiki/lambdas.md has $LAMBDA_WIKILINKS wikilinks but wiki/infra/lambdas.md has $INFRA_BULLETS bullets"
+  HALT=1
+fi
+
+# 4. Index Categories bullet count must match
+INDEX_LAMBDA_COUNT=$(grep -oE '\[\[lambdas\]\] — [0-9]+' wiki/index.md | grep -oE '[0-9]+')
+if [ "$INDEX_LAMBDA_COUNT" != "$LAMBDA_WIKILINKS" ]; then
+  echo "❌ FAIL: wiki/index.md Categories says $INDEX_LAMBDA_COUNT Lambdas but wiki/lambdas.md has $LAMBDA_WIKILINKS"
+  HALT=1
+fi
+
+[ "$HALT" = "1" ] && echo "VERIFICATION FAILED — go back and complete the missing actions before reporting done"
+[ "$HALT" = "0" ] && echo "✓ verification passed"
+```
+
+If any check fails, do NOT proceed to the completion summary. Identify the missing action (likely from the §✅ checklist at the top of this file), complete it, and re-run the verification.
 
 ---
 
