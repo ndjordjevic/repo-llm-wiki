@@ -84,6 +84,12 @@ For each page containing `Confidence: low`, record: `<page>: contains "Confidenc
 ### W3. Suspiciously short detail page
 For each `wiki/<category>/<slug>.md` whose body is < 200 characters (excluding the H1 and the `> Type:` line), record: `<page>: detail page is very short — flow narrative may be missing`.
 
+### W4. Malformed story log entry
+For each `## <timestamp> — story` section in `wiki/log.md`, check that it contains all required fields: `Description:`, `SHA:`, `Branch:`, `Files changed:`, `Pages updated:`, `Summary:`, `Tool:`. For any missing field, record: `wiki/log.md: story entry at <timestamp> missing field: <field-name>`.
+
+### W5. Story entry references missing page
+For each `Pages updated:` line in a story log entry, parse the comma-separated page paths. For any path that no longer exists under `wiki/`, record: `wiki/log.md: story entry at <timestamp> references missing page: <path>` — this indicates the wiki was restructured after the story ran.
+
 ---
 
 ## Report

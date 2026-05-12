@@ -2,7 +2,7 @@
 
 > Companion to `phase-1-prd.md`. Covers *how* the skill is built: file layout, step-by-step agent instructions, generation order, token strategy, and lint rules.
 
-Status: draft 3 · Date: 2026-05-11
+Status: draft 4 · Date: 2026-05-12
 
 > **Draft-3 supersession notice.** After running v0.1 on the validation repo the output was rejected as too heavy (architecture/repo-map/glossary pages, broken file-link citations in Obsidian, mermaid diagrams nobody could read, lambdas lumped into module clusters). v0.2 pivots to a **drill-down** wiki: `index.md` → category page → per-item flow narrative. The **authoritative source of the v0.2 instructions is `skills/repo-llm-wiki/{init,refresh,lint}.md`** — the SKILL files are now canonical and have been rewritten end-to-end.
 >
@@ -14,7 +14,7 @@ Status: draft 3 · Date: 2026-05-11
 
 The skill is plain Markdown instructions. The "agent" referenced throughout is the **host LLM session** running the skill (Claude Code, Cursor, or Copilot) — there is no external model invocation, no separate process, no orchestration daemon.
 
-**v0.2 is multi-agent for analysis, single-writer for pages.** The main session runs the cheap deterministic shell pass (§3 below) and the page-writing pass. Between those, it fans out to **four subagents in parallel** that do the expensive work: enumerate `cmd/` and produce flow narratives, enumerate Terraform resources, group scripts, draft the overview paragraph. Subagent prompts are self-contained; their returns are short structured payloads. See `init.md` Step 2 for the contracts. Hosts without a subagent primitive fall back to inline analysis — same output, slower, noisier main context.
+**v0.4 is multi-agent for analysis, single-writer for pages.** The main session runs the cheap deterministic shell pass (§3 below) and the page-writing pass. Between those, it fans out to **up to five subagents in parallel**: Subagent A (cmd/ flow narratives, sharded into batches of ≤15 when >20 dirs), B (Terraform resources), C (scripts grouping), D (overview paragraph), E (package introspection for go-library/mixed repos). Subagent prompts are self-contained; their returns are short structured payloads. See `init.md` Step 2 for the contracts. Hosts without a subagent primitive fall back to inline analysis — same output, slower, noisier main context.
 
 ---
 
@@ -45,11 +45,10 @@ No config file is generated in the repo. All defaults are embedded here.
 ```yaml
 name: repo-llm-wiki
 description: "Generates a committable Markdown wiki from the repo it lives in — invoke with /repo-llm-wiki"
-version: "0.2.0"
+version: "0.4.0"
 trigger: "/repo-llm-wiki"
 compatible_agents:
-  tested: [claude]
-  untested: [cursor, copilot]
+  tested: [claude, cursor, copilot]
 author: "Nenad Djordjevic"
 github: "ndjordjevic"
 license: "apache-2.0"
@@ -230,8 +229,8 @@ Detected profile: iac-aws (go-lambda-monorepo)
 
 | # | File | Built from | Subagent? |
 |---|---|---|---|
-| 1 | Category list pages (`lambdas.md`, `cli.md`, `migrations.md`, `scripts.md`) | Subagent A + C returns | A, C |
-| 2 | Per-item detail pages under `lambdas/`, `cli/`, `migrations/` | Subagent A return | A |
+| 1 | Category list pages (`lambdas.md`, `cli.md`, `packages.md`, `scripts.md`) | Subagent A + C + E returns | A, C, E |
+| 2 | Per-item detail pages under `lambdas/`, `cli/`, `packages/` | Subagent A + E return | A, E |
 | 3 | `wiki/infra.md` (+ `wiki/infra/<type>.md` if split) | Subagent B return | B |
 | 4 | `wiki/log.md` | template + REPO_SHA, date, page count | — |
 | 5 | `wiki/index.md` | Subagent D overview + emitted categories + tech stack from §3 | D |
@@ -551,7 +550,7 @@ Rules the skill instructions impose on the agent at generation time:
 1. **Versions from source**: always use `GO_VERSION` / `TF_VERSION` / `NODE_VERSION` from §3. If none found, write `unknown` — never trust README prose.
 2. **Counts from shell**: Lambda count = `LAMBDA_COUNT`. GSI count = length of `GSI_NAMES`. Never estimate.
 3. **No invented names**: every component name in `architecture.md` must match a real directory, file, or Terraform resource. If unsure, omit and add a confidence note.
-4. **Citations required**: every claim in module pages and architecture.md must include a relative link to the source file, e.g. `([app/internal/handler/create.go](../app/internal/handler/create.go))`. An uncited claim is a lint error.
+4. **Source-file citations forbidden (v0.2+ inversion)**: relative paths to source files (`../app/...`) must NOT appear in any wiki page. Obsidian opens `wiki/` as the vault root so they resolve to nothing. Lint E2 errors on any `../` or `./` link leaving `wiki/`. The v0.1 rule that required citations was reversed.
 5. **Confidence markers**: when a claim is inferred (no explicit source), add `> Confidence: low — inferred from directory names.` Do not silently state low-confidence things as fact.
 6. **Sensitive flags without reading content**: the "possibly sensitive" callout in `repo-map.md` fires on filename patterns **and** an extension restricted to `.csv`, `.json`, `.txt`, `.xlsx`, `.xls`, `.sql`, `.dump`. Source code files matching the same name patterns (e.g. `account_handler.go`) are never flagged. The agent does not read the contents of any flagged file.
 
@@ -629,7 +628,7 @@ Run all checks. Collect all warnings and errors. Print a grouped report at the e
 | Check | How |
 |---|---|
 | Broken wikilinks | For every `[[slug]]` in wiki/, check `wiki/<slug>.md` exists |
-| Broken file citations | For every `(../path)` or `(./path)` in wiki/, check the path resolves from repo root |
+| Forbidden file citations (E2) | For every `(../path)` or `(./path)` in wiki/, **error** — relative paths leaving `wiki/` are forbidden (Obsidian vault root issue). Was "check they resolve" in v0.1; inverted in v0.2. |
 | Missing log entry | `wiki/log.md` must have at least one `## ` entry |
 | Missing AGENTS.md block | `AGENTS.md` must contain `<!-- repo-llm-wiki: begin -->` |
 | index.md missing links | Every `.md` file in `wiki/` (except `log.md`, `.archive/`) must appear in `wiki/index.md` |

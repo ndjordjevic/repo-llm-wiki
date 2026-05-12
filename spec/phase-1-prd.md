@@ -4,7 +4,7 @@
 > Sibling to [`pin-llm-wiki`](../../pin-llm-wiki/README.md) (which ingests external sources).
 > Scope: Phase 1 only. Phases 2–4 are referenced for context, not designed here.
 
-Status: draft 5 · Date: 2026-05-11 · Owner: nenad
+Status: draft 6 · Date: 2026-05-12 · Owner: nenad
 
 > **Draft-5 amendment (v0.4 of the skill).** Survey of ~50 repos in `~/GolandProjects` confirms the v0.4 shape set covers the majority:
 > - 14 `go-monorepo` (e.g. connect-api with 101 cmd entries, tfaws-dregdata with 40, payments with 31)
@@ -90,6 +90,8 @@ wiki/
   lambdas/<name>.md         # per-Lambda flow narrative (trigger → handler → service → store)
   cli.md                    # flat list of every CLI tool
   cli/<name>.md             # per-CLI flow narrative
+  packages.md               # flat list of top-level Go packages (go-library / mixed repos)
+  packages/<name>.md        # per-package role, key exports, who imports it
   scripts.md                # build + utility scripts grouped by purpose; CI workflows section
   infra.md                  # IaC repos: resources, environments, DynamoDB summary, …
   infra/<resource-type>.md  # split out per resource type when total > 15 or types > 3
@@ -99,7 +101,7 @@ wiki/
 AGENTS.md                   # created or extended; tells agents to read wiki/index.md first
 ```
 
-**Closed category set.** Top-level category pages are exactly four: `lambdas`, `cli`, `scripts`, `infra`. The skill MUST NOT invent new categories (no `migrations.md`, no `services.md`, no `tools.md`). Items are placed by **type**, not by theme: anything that uses `aws-lambda-go` is a Lambda; anything else under `cmd/` (or equivalent) is a CLI tool. Migration runners, tenant cleanup utilities, encryption helpers — all go into one of the two type-based categories, with `⚠ deprecated` tags where applicable. This is the single most important rule in v0.3 and is enforced by lint E8.
+**Closed category set.** Top-level category pages are exactly five: `lambdas`, `cli`, `packages`, `scripts`, `infra`. The skill MUST NOT invent new categories (no `migrations.md`, no `services.md`, no `tools.md`). Items are placed by **type**, not by theme: anything that uses `aws-lambda-go` is a Lambda; anything else under `cmd/` (or equivalent) is a CLI tool. Migration runners, tenant cleanup utilities, encryption helpers — all go into one of the two type-based categories, with `⚠ deprecated` tags where applicable. `packages` is emitted only when top-level Go package directories exist (go-library repos and mixed monorepos). This is the single most important rule in v0.3+ and is enforced by lint E8.
 
 **What is deliberately not generated**:
 - No `overview.md` — overview is the opening paragraph of `index.md`.
@@ -123,9 +125,9 @@ A detail page (e.g. `wiki/lambdas/amendArrangement.md`) contains:
 
 The v0.1 wiki cited every claim with a relative path to a source file (`../app/internal/...`). In Obsidian — the primary reading environment — `wiki/` opens as the vault root, and those paths resolve to nothing: every link is broken. v0.2 uses **wikilinks between wiki pages only**. Source-file claims are still verifiable because every named component must exist (see §5.5 rule 2).
 
-### 5.3 Repo-type awareness — via category discovery, not profiles
+### 5.3 Repo-type awareness — via shape detection and fixed category set
 
-v0.1 used a small set of fixed profiles (`iac-aws`, `generic`) to switch templates. v0.2 drops that in favour of **category discovery**: the skill enumerates `cmd/`, `infra/`, scripts, and workflows independently, and emits a category only when there's evidence for it.
+v0.1 used fixed profiles (`iac-aws`, `generic`) to switch templates. v0.2 replaced that with **category discovery**. v0.3 replaced discovery with a **fixed closed category set** driven by repo-shape detection, after discovering that free discovery caused the agent to invent categories like `migrations.md`. v0.4 is the current model: the skill detects one of four repo shapes (`go-monorepo`, `go-single-binary`, `go-library`, `go-other`) and emits only the five permitted categories when evidence exists.
 
 - Repo with `*.tf` files → `infra.md` (split if many resource types).
 - Repo with `cmd/*/main.go` directories → `lambdas.md` and/or `cli.md` based on imports (`aws-lambda-go` presence).
@@ -137,9 +139,9 @@ The benefit over profile detection: the skill works correctly on mixed repos (an
 
 ### 5.4 No config file in Phase 1
 
-All defaults — which directories to skip, how to detect profile, what to flag as sensitive — are **embedded in the skill definition** (`SKILL.md` and its workflow files). No `.repo-llm-wiki.yml` is created. This keeps the setup to a single command with no mandatory configuration step.
+All defaults — which directories to skip, how to detect repo shape, what to flag as sensitive — are **embedded in the skill definition** (`SKILL.md` and its workflow files). No `.repo-llm-wiki.yml` is created. This keeps the setup to a single command with no mandatory configuration step.
 
-The profile can be overridden by passing it as an argument: `/repo-llm-wiki init iac-aws`. Without an argument, the skill auto-detects it.
+Repo-shape is auto-detected; there is no profile-override argument in v0.4. Subcommands take no arguments beyond the subcommand name itself (`init`, `refresh`, `lint`).
 
 ### 5.5 Accuracy rules
 
@@ -182,7 +184,7 @@ Phase 1 ships when, on the validation repo (`tfaws-dregdata-dhs-app-authorisatio
 3. ✅ The wiki is **strictly better than DeepWiki** on at least these axes: correct Go version, complete workflow list, accurate Lambda count, messy reality surfaced via the *Migration scripts* and *Scripts* categories (deprecated runners visible, build scripts grouped), no claims that fail lint.
 4. ✅ A teammate who has never seen the repo can answer 5 of 5 "where is X?" questions using only the wiki, in under 10 minutes.
 5. ✅ A Claude Code agent told to use the wiki uses ≥50% fewer tokens to answer "what does this repo do and how is it deployed?" vs. cold (no-wiki) baseline.
-6. ✅ Re-running `refresh` on an unchanged repo produces a diff of zero lines for the `index.md` TOC, category list pages, and `infra.md` resource tables; ≤20% line churn on prose detail pages (`lambdas/<name>.md` etc.).
+6. ✅ Re-running `refresh` on an unchanged repo (same SHA) exits immediately with "Wiki is already up to date" — zero files written. When run after real commits, category list pages and `infra.md` resource tables are stable; ≤20% line churn on prose detail pages (`lambdas/<name>.md` etc.).
 7. ✅ `lint` passes with zero errors on the generated output.
 
 If any of 1–4 fails on the validation repo, Phase 1 isn't done.
@@ -211,7 +213,8 @@ These were open during drafting; all closed before implementation plan is writte
 | 1 | Single agent or multi-agent? | **Multi-agent fan-out for analysis, single writer for pages.** v0.1 went single-agent; on a 42-Lambda repo the main context got crowded enough that grouping decisions suffered. v0.2 spawns four subagents in parallel (cmd-flow, terraform, scripts, overview) and the main agent assembles their returns into pages. Style stays consistent because one agent writes. Hosts without a subagent primitive degrade to inline analysis — same output, slower. |
 | 2 | Mermaid diagrams? | **No.** v0.1 generated a 40-node `architecture.md` flowchart and it was unreadable. Deferred until there's a clear use case. |
 | 3 | Wikilink flavour? | **`[[wikilinks]]`** — Obsidian-compatible. GitHub renders them poorly; that's accepted. |
-| 4 | Source-file citations? | **None in v0.2.** Obsidian opens `wiki/` as the vault root, so relative paths to source files (`../app/...`) resolve to nothing — every link was broken. Lint now errors on any relative path leaving `wiki/`. |
+| 4 | Source-file citations? | **None in v0.2+.** Obsidian opens `wiki/` as the vault root, so relative paths to source files (`../app/...`) resolve to nothing — every link was broken. Lint E2 errors on any relative path leaving `wiki/`. Inverted from v0.1 where citations were required. |
+| 3a | Category model? | **Shape detection + fixed closed set (v0.4).** v0.2 used free category discovery; the agent invented `migrations.md` based on name-prefix heuristics. v0.3 locked to four categories; v0.4 added `packages` for library shapes. Lint E8 fails any page outside the permitted five. |
 | 5 | `AGENTS.md` merge? | **Append**, inside a clearly delimited block. Never clobber an existing file. |
 | 6 | Skill name? | **`/repo-llm-wiki`** — full name, no alias. |
 

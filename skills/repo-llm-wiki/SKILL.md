@@ -31,10 +31,11 @@ Generates a small, accurate, committable Markdown wiki *inside* a repo, written 
 
 ## Trigger phrases
 
-- **`/repo-llm-wiki`** (with subcommands: `init`, `refresh`, `lint`)
+- **`/repo-llm-wiki`** (with subcommands: `init`, `refresh`, `lint`, `story`)
 - "Build a wiki from this repo"
 - "Refresh the repo-llm-wiki output"
 - "Lint the repo wiki"
+- "Update the wiki for my story"
 
 ```
 repo source files (Go, TF, README, workflows, scripts, ...)
@@ -55,6 +56,7 @@ a healthy, queryable knowledge base
 | `init` | Scaffold and generate a new wiki |
 | `refresh` | Regenerate wiki from current HEAD |
 | `lint` | Validate wiki health |
+| `story "<description>"` | Update wiki pages affected by the current branch's changes |
 
 ## Skill directory
 
@@ -75,15 +77,17 @@ No external models, no orchestration daemon. On hosts without a subagent primiti
    - **`init`** → `init.md`
    - **`refresh`** → `refresh.md`
    - **`lint`** → `lint.md`
+   - **`story`** → `story.md`
 4. If the subcommand is missing or unrecognised, print and stop:
    ```
    Usage: /repo-llm-wiki <subcommand>
-     init             — scaffold and generate a new wiki
-     refresh          — regenerate wiki from current HEAD
-     lint             — validate wiki health
+     init                        — scaffold and generate a new wiki
+     refresh                     — regenerate wiki from current HEAD
+     lint                        — validate wiki health
+     story "<description>"       — update wiki from current branch changes
    ```
 5. Do not proceed beyond this dispatch step before reading the target file.
 
 ## Git policy (canonical)
 
-**Never run `git commit` or `git push`** after any subcommand — `init`, `refresh`, `lint`, or any auto-fix — unless the human explicitly asked to commit in this conversation. Subcommand files reference this policy without restating it. The wiki's own `AGENTS.md` block carries the same rule for downstream agents.
+**Never run `git commit` or `git push`** after any subcommand — `init`, `refresh`, `lint`, `story`, or any auto-fix — unless the human explicitly asked to commit in this conversation. Subcommand files reference this policy without restating it. The wiki's own `AGENTS.md` block carries the same rule for downstream agents.

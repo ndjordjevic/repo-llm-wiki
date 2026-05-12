@@ -62,6 +62,7 @@ AGENTS.md                    wiki pointer block appended for other agents
 | `/repo-llm-wiki init` | First-time generation. Stops if `wiki/index.md` already exists. |
 | `/repo-llm-wiki refresh` | Regenerate all pages from HEAD. Requires an existing wiki. |
 | `/repo-llm-wiki lint` | Validate wiki health: broken wikilinks, stale citations, missing log entries. |
+| `/repo-llm-wiki story "<description>"` | Diff-aware update: detects changes on the current branch vs. its base, updates only affected wiki pages, and logs the story. Run when you finish a dev story. |
 
 `infra.md` is generated automatically when Terraform files are found in `infra/` — no configuration needed.
 
@@ -72,7 +73,8 @@ skills/repo-llm-wiki/
   SKILL.md          dispatch and git policy
   init.md           full init procedure
   refresh.md        regen procedure (delegates to init.md §1–4)
-  lint.md           E1–E6 errors, W1–W4 warnings
+  lint.md           E1–E9 errors, W1–W5 warnings
+  story.md          diff-aware wiki update for a finished dev story
   templates/
     wiki/
       index.md.tmpl
