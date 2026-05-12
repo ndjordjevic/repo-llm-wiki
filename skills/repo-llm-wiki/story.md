@@ -177,20 +177,22 @@ For each file in `CHANGED_FILES`:
 | `*.sh` at repo root, `Makefile`, `.github/workflows/**` | `wiki/scripts.md` |
 | Anything else | unmatched |
 
-**Step 4d — New top-level entries.**
+**Step 4d — New top-level entries (HARD RULE).**
 
-If `CHANGED_FILES` adds a brand-new `cmd/<X>/` or `app/cmd/<X>/` with no matching detail page in the wiki, **do not invent a list-page row** for it. Phase 1's category list pages are wikilink tables; adding a non-wikilink row breaks lint E9 (count parity vs `infra/lambdas.md`).
+If `CHANGED_FILES` adds a brand-new `cmd/<X>/`, `app/cmd/<X>/`, top-level package dir, or any new entrypoint with **no matching detail page** in the wiki, treat it as a `NEW_ENTRY`. Phase 1's category list pages are wikilink-only tables, and adding a non-wikilink row breaks lint E9 (count parity vs `infra/<resource>.md`).
 
-Instead:
-- Do not add the new entry's files to any page's update set.
-- Record the entry's name and route under `NEW_ENTRIES` (separate from `unmatched`).
-- The completion summary will surface a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
+For every `NEW_ENTRY`:
 
-**Large-page-set guard.** If `AFFECTED_PAGES` exceeds 6 pages, print:
-> "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
+1. **Discard all files under that entry from routing.** Do not add `cmd/<X>/**`, `app/cmd/<X>/**`, `app/internal/handler/<X>/**`, `app/internal/service/<X>/**` to any page's diff-hunk set.
+2. **Do not add `wiki/lambdas.md` / `wiki/cli.md` / `wiki/packages.md` to `AFFECTED_PAGES` solely because of a `NEW_ENTRY`.** A list page is only in `AFFECTED_PAGES` when an *existing* row's detail page has changed.
+3. **Record** the entry under `NEW_ENTRIES` with its kind (Lambda / CLI / package) and source path.
+4. The completion summary surfaces a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
 
-**Large-page-set guard:**
-If the resulting `AFFECTED_PAGES` set has more than 6 pages, print:
+**Reasoning for the main agent:** a new Lambda does *not* by itself justify updating `wiki/lambdas.md`. The list page is a wikilink table; the row can only be added once the detail page exists, and only `refresh` creates detail pages. Story is read-only on the list page until a `refresh` runs.
+
+The Terraform side (`infra/<resource>.md`) is the *one exception*: those are flat inventory bullets, and adding `latest-authorisations` to `infra/lambdas.md` is fine because it's a deployed resource name, not a wikilink.
+
+**Large-page-set guard.** If `AFFECTED_PAGES` (after applying 4d) exceeds 6 pages, print:
 > "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
 
 ---
@@ -217,9 +219,30 @@ Each subagent prompt must be self-contained (no view of this conversation). Incl
 1. The page's **current full content**.
 2. The **diff hunks** for files cited by this page (from step 5).
 3. The **dev description** verbatim.
-4. This instruction:
+4. The page's **role** (list page vs detail page vs infra inventory) — see below.
+5. Role-specific instructions.
 
-   > Update this wiki page to reflect the code changes shown in the diff. Keep the existing format, headings, and wikilink structure. Rewrite only sections that are affected by the diff. Do **not** add relative paths to source files (no `../app/...`, no `./infra/...`). Refer to handlers, services, and resources by their conceptual role, not by file path. Allowed `[[wikilinks]]` targets are: `index`, `log`, the five category pages (`lambdas`, `cli`, `packages`, `scripts`, `infra`), and existing detail pages under those categories (e.g. `lambdas/foo`, `infra/dynamodb-tables`). Remove any wikilink whose target you cannot verify from the page's existing links. Return the full updated page content as Markdown — nothing else.
+**Determine the page's role:**
+
+- **List page**: `wiki/lambdas.md`, `wiki/cli.md`, `wiki/packages.md` — flat wikilink tables, one row per existing detail page.
+- **Infra inventory**: `wiki/infra.md`, `wiki/infra/<slug>.md` — Markdown tables or bulleted resource lists; adding bullets for new resources is fine (no wikilink requirement).
+- **Detail page**: `wiki/lambdas/<X>.md`, `wiki/cli/<X>.md`, `wiki/packages/<X>.md`, `wiki/scripts.md`, `wiki/index.md` — prose pages.
+
+**Base instruction (all pages):**
+
+> Update this wiki page to reflect the code changes shown in the diff. Keep the existing format, headings, and wikilink structure. Rewrite only sections that are affected by the diff. Do **not** add relative paths to source files (no `../app/...`, no `./infra/...`). Refer to handlers, services, and resources by their conceptual role, not by file path. Allowed `[[wikilinks]]` targets are: `index`, `log`, the five category pages (`lambdas`, `cli`, `packages`, `scripts`, `infra`), and existing detail pages under those categories (e.g. `lambdas/foo`, `infra/dynamodb-tables`). Remove any wikilink whose target you cannot verify from the page's existing links. Return the full updated page content as Markdown — nothing else.
+
+**Additional instruction for LIST pages** (append to base):
+
+> **CRITICAL: this is a category list page.** Every data row in this page's table is a `[[wikilink]]` to an existing detail page. You **MUST NOT add new rows** to this table, even if the diff mentions a new Lambda, CLI tool, or package — the new entry has no detail page yet, and adding a non-wikilink row breaks lint validation (E9: count parity with `infra/<resource>.md`). If you see a new entry in the diff, **leave the table unchanged**. You may only modify existing rows whose detail page appears in the diff (e.g. rewriting the one-line description). Do not change the headline count (e.g. "This repo deploys N AWS Lambda functions") — that number stays as-is until `refresh` runs.
+
+**Additional instruction for INFRA INVENTORY pages** (append to base):
+
+> This page is a flat resource inventory. Adding bullets / table rows for new deployed resources (e.g. a new Terraform module) is fine — the inventory does not require wikilinks. Keep the alphabetical or original ordering of the existing list.
+
+**Additional instruction for DETAIL pages** (append to base):
+
+> This page describes a single component. Update its prose to reflect the diff (e.g. a service gaining a new method, a handler gaining a new endpoint). Keep the page 3-6 sentences. Do not split into subsections.
 
 Subagent returns the full new page body. Write it directly, overwriting the prior content.
 
