@@ -2,7 +2,7 @@
 
 (Skill-directory paths are defined in `SKILL.md`. The git policy in `SKILL.md` is canonical: do not commit or push unless the human explicitly asked.)
 
-`story` is a diff-aware, narrow update. It updates only the wiki pages affected by the current branch's changes — it does not regenerate the whole wiki.
+`story` is a diff-aware, narrow update. It updates only the wiki pages affected by the current branch's changes — it does not regenerate the whole wiki. For new top-level entries (a new Lambda, CLI tool, or top-level package), story also creates the fresh detail page inline and threads it into the list page, infra inventory, and index, so the dev finishes with a consistent wiki without needing to run `refresh`.
 
 ---
 
@@ -177,89 +177,143 @@ For each file in `CHANGED_FILES`:
 | `*.sh` at repo root, `Makefile`, `.github/workflows/**` | `wiki/scripts.md` |
 | Anything else | unmatched |
 
-**Step 4d — New top-level entries (HARD RULE).**
+**Step 4d — New top-level entries (story DOES create their detail pages).**
 
-If `CHANGED_FILES` adds a brand-new `cmd/<X>/`, `app/cmd/<X>/`, top-level package dir, or any new entrypoint with **no matching detail page** in the wiki, treat it as a `NEW_ENTRY`. Phase 1's category list pages are wikilink-only tables, and adding a non-wikilink row breaks lint E9 (count parity vs `infra/<resource>.md`).
+If `CHANGED_FILES` adds a brand-new `cmd/<X>/`, `app/cmd/<X>/`, or top-level package dir with **no matching detail page** in the wiki, treat it as a `NEW_ENTRY`. Story handles new entries by *creating a fresh detail page for each* and threading it into all the dependent pages — mirroring what `init` does for that slice. The dev finishes with a wiki that already reflects their change; `refresh` is not required after a normal `story`.
 
 For every `NEW_ENTRY`:
 
-1. **Discard all files under that entry from routing.** Do not add `cmd/<X>/**`, `app/cmd/<X>/**`, `app/internal/handler/<X>/**`, `app/internal/service/<X>/**` to any page's diff-hunk set.
-2. **Do not add `wiki/lambdas.md` / `wiki/cli.md` / `wiki/packages.md` to `AFFECTED_PAGES` solely because of a `NEW_ENTRY`.** A list page is only in `AFFECTED_PAGES` when an *existing* row's detail page has changed.
-3. **For Lambda NEW_ENTRIES specifically: also suppress E9-governed counterpart pages.** Strip the new entry's Terraform module name (e.g. `latest-authorisations`) from any diff hunks routed to `wiki/infra/lambdas.md`, and instruct that subagent **not to add a bullet** for it. Likewise, do not update the Lambda count reference (`"24 Lambda functions"`) on `wiki/infra.md` — keep the prior count. This keeps lint E9 passing between `story` and `refresh`.
-4. **Record** the entry under `NEW_ENTRIES` with its kind (Lambda / CLI / package), source path, and (if Lambda) Terraform module name.
-5. The completion summary surfaces a loud "run `/repo-llm-wiki refresh` to generate the new detail page" notice.
+1. **Record it** under `NEW_ENTRIES` with: `name` (cmd-dir name, e.g. `latestAuthorisations`), `category` (`lambdas` | `cli` | `packages`), `source_root` (e.g. `app/cmd/latestAuthorisations/`), and (if applicable) `infra_module_name` (e.g. `latest-authorisations` — derive from Terraform changes or by kebab-casing the slug if unknown).
+2. **Schedule a NEW-DETAIL subagent** for it (see Step 5 — Subagent A-style source reader). This subagent will read the entry's source files and return a flow narrative.
+3. **Add the parent list page** (`wiki/lambdas.md` / `wiki/cli.md` / `wiki/packages.md`) to `AFFECTED_PAGES` with role `list-page-with-adds`.
+4. **Add the E9-counterpart infra pages** for Lambda entries: `wiki/infra/lambdas.md` (bullet addition) and `wiki/infra.md` (Lambda count bump). For CLI / package entries, no infra counterpart.
+5. **Add `wiki/index.md`** to `AFFECTED_PAGES` with role `index-with-count-bump` — only the `## Categories` count for the affected category needs updating (e.g. `[[lambdas]] — 24 Lambda functions`).
+6. **Add the new entry's source files** to the diff-hunk set for the NEW-DETAIL subagent only (not for list-page subagents — they only need the slug and a 1-line description, not full hunks).
 
-**Reasoning for the main agent:** a new Lambda does *not* by itself justify updating any of the three E9-governed pages (`wiki/lambdas.md`, `wiki/infra/lambdas.md`, `wiki/infra.md`'s Lambda count). The wiki keeps a consistent pre-refresh view: 23 documented Lambdas across all three pages, with a "1 pending" notice in the completion summary. Once the user runs `refresh`, all three pages move to 24 atomically.
+**Why the design change**: the previous version of this step suppressed list-page updates and waited for `refresh`. In practice that confuses the dev (they see "story ran" but the wiki count is wrong), and it forces a second invocation. Doing the work inline is the obvious user model. The risk — that the NEW-DETAIL subagent produces a worse page than `refresh`'s full-context Subagent A would — is mitigated by giving the NEW-DETAIL subagent the same prompt and inputs as init §3 Subagent A for that one entry.
 
-For non-Lambda infra changes (e.g. a new DynamoDB GSI on an existing table, a new SQS queue, environment additions), update normally — those aren't E9-governed.
+**Non-Lambda infra changes** (e.g. new DynamoDB GSI on an existing table, new SQS queue, environment additions) update normally — those route via the fallback table to existing infra pages and don't need a NEW-DETAIL subagent.
 
 **Large-page-set guard.** If `AFFECTED_PAGES` (after applying 4d) exceeds 6 pages, print:
 > "This story affects <N> wiki pages. That's broad for `story` — consider running `/repo-llm-wiki refresh` instead. Proceed anyway? (yes/no)"
 
 ---
 
-## Step 5 — Collect full diff hunks for affected pages
+## Step 5 — Read sources for NEW_ENTRIES (NEW-DETAIL subagents)
 
-For each affected page, identify its cited files (from the scan in step 4). Fetch full diff hunks for only those files:
+Skip this step if `NEW_ENTRIES` is empty.
+
+For each `NEW_ENTRY`, spawn a **NEW-DETAIL subagent** (in parallel with all other NEW-DETAIL subagents — single message, multiple `Agent` tool calls). Each subagent uses the same prompt shape as `init.md` §3 **Subagent A** (cmd/ flow narratives) or §3 **Subagent E** (packages), depending on category.
+
+**For Lambda / CLI NEW_ENTRIES — Subagent A-style prompt:**
+
+Inputs to pass:
+- `name` (e.g. `latestAuthorisations`)
+- `source_root` (e.g. `app/cmd/latestAuthorisations/`)
+- The dev description (helps disambiguate intent when source is ambiguous)
+- Up to 200 lines each of: `<source_root>/main.go`, the relevant `app/internal/handler/<name>/handler.go` if it exists, and the first non-test `.go` file under the handler's imported service package
+
+The subagent must:
+1. Classify type: `Lambda` if `main.go` imports `aws-lambda-go` or calls `lambda.Start(`, else `CLI tool`.
+2. Infer trigger using the Subagent A trigger rules from `init.md` §3 Subagent A.
+3. Produce a 3-6 sentence flow narrative (handler → service → data path → response).
+4. Return as the structured JSON-ish object format from `init.md` §3 Subagent A.
+
+**For package NEW_ENTRIES — Subagent E-style prompt:**
+
+Inputs: the package directory, module path. Subagent reads first non-test `.go` file, extracts exports, writes summary per `init.md` §3 Subagent E.
+
+**Main agent action after NEW-DETAIL returns:**
+
+Using the returned classification + flow narrative, write the new detail page directly using the templates from `init.md` §5.2 (Lambda/CLI detail page contract). Path:
+- `wiki/lambdas/<name>.md` for Lambda
+- `wiki/cli/<name>.md` for CLI tool
+- `wiki/packages/<name>.md` for package
+
+Print: `created: wiki/<category>/<name>.md`.
+
+**Important:** complete this write BEFORE spawning Step 6's list-page subagents. The list-page subagent's prompt will reference the new detail page by slug, and we want the file to exist on disk when lint runs after.
+
+---
+
+## Step 6 — Collect diff hunks for existing affected pages
+
+For each entry in `AFFECTED_PAGES` (excluding pages already written in Step 5), identify its cited / claimed source files (from the routing in Step 4). Fetch full diff hunks for only those files:
 
 ```bash
 git diff <FORK_SHA>..HEAD -- <cited-files>   # committed
 git diff HEAD -- <cited-files>               # uncommitted
 ```
 
-These hunks are passed to the subagent for that page.
+For list-page roles with new entries, also include each NEW_ENTRY's `{name, category, trigger, one_line_summary}` (from Step 5's returns) so the subagent can add the wikilink row.
 
 ---
 
-## Step 6 — Fan-out update (parallel subagents)
+## Step 7 — Fan-out update (parallel subagents)
 
 Spawn one subagent per affected page **in a single message** (parallel), using the `Agent` tool with `subagent_type=general-purpose`.
 
 Each subagent prompt must be self-contained (no view of this conversation). Include:
 
 1. The page's **current full content**.
-2. The **diff hunks** for files cited by this page (from step 5).
+2. The **diff hunks** for files cited by this page (from Step 6).
 3. The **dev description** verbatim.
-4. The page's **role** (list page vs detail page vs infra inventory) — see below.
-5. Role-specific instructions.
+4. The page's **role** — see below.
+5. Role-specific instructions (below).
+6. For list-page-with-adds and index-with-count-bump roles: the `NEW_ENTRIES` payload (names, categories, triggers, 1-line summaries) — so the subagent has everything needed to insert rows / bump counts.
 
 **Determine the page's role:**
 
-- **List page**: `wiki/lambdas.md`, `wiki/cli.md`, `wiki/packages.md` — flat wikilink tables, one row per existing detail page.
-- **Infra inventory**: `wiki/infra.md`, `wiki/infra/<slug>.md` — Markdown tables or bulleted resource lists; adding bullets for new resources is fine (no wikilink requirement).
-- **Detail page**: `wiki/lambdas/<X>.md`, `wiki/cli/<X>.md`, `wiki/packages/<X>.md`, `wiki/scripts.md`, `wiki/index.md` — prose pages.
+| Role | Pages | When |
+|---|---|---|
+| `list-page` | `wiki/lambdas.md`, `wiki/cli.md`, `wiki/packages.md` | No new entries for that category; existing rows may be edited |
+| `list-page-with-adds` | same | One or more NEW_ENTRIES belong to that category |
+| `infra-inventory` | `wiki/infra.md`, `wiki/infra/<slug>.md` | Always when in `AFFECTED_PAGES` |
+| `detail-page` | `wiki/lambdas/<X>.md`, `wiki/cli/<X>.md`, `wiki/packages/<X>.md` | Existing detail page in `AFFECTED_PAGES` (story is updating, not creating) |
+| `prose` | `wiki/scripts.md` | When scripts/workflows changed |
+| `index-with-count-bump` | `wiki/index.md` | One or more NEW_ENTRIES exist; only update the affected category's count in `## Categories` |
 
 **Base instruction (all pages):**
 
-> Update this wiki page to reflect the code changes shown in the diff. Keep the existing format, headings, and wikilink structure. Rewrite only sections that are affected by the diff. Do **not** add relative paths to source files (no `../app/...`, no `./infra/...`). Refer to handlers, services, and resources by their conceptual role, not by file path. Allowed `[[wikilinks]]` targets are: `index`, `log`, the five category pages (`lambdas`, `cli`, `packages`, `scripts`, `infra`), and existing detail pages under those categories (e.g. `lambdas/foo`, `infra/dynamodb-tables`). Remove any wikilink whose target you cannot verify from the page's existing links. Return the full updated page content as Markdown — nothing else.
+> Update this wiki page to reflect the code changes shown in the diff. Keep the existing format, headings, and wikilink structure. Rewrite only sections that are affected by the diff. Do **not** add relative paths to source files (no `../app/...`, no `./infra/...`). Refer to handlers, services, and resources by their conceptual role, not by file path. Return the full updated page content as Markdown — nothing else.
 
-**Additional instruction for LIST pages** (append to base):
+**Additional instruction for `list-page` (no new entries)** (append to base):
 
-> **CRITICAL: this is a category list page.** Every data row in this page's table is a `[[wikilink]]` to an existing detail page. You **MUST NOT add new rows** to this table, even if the diff mentions a new Lambda, CLI tool, or package — the new entry has no detail page yet, and adding a non-wikilink row breaks lint validation (E9: count parity with `infra/<resource>.md`). If you see a new entry in the diff, **leave the table unchanged**. You may only modify existing rows whose detail page appears in the diff (e.g. rewriting the one-line description). Do not change the headline count (e.g. "This repo deploys N AWS Lambda functions") — that number stays as-is until `refresh` runs.
+> Every data row in this page's table is a `[[wikilink]]` to an existing detail page. Do not add new rows. You may update the one-line description column for rows whose detail page appears in the diff. Do not change the headline count.
 
-**Additional instruction for INFRA INVENTORY pages** (append to base):
+**Additional instruction for `list-page-with-adds`** (append to base):
 
-> This page is a flat resource inventory. Adding bullets / table rows for new deployed resources (e.g. a new Terraform module) is fine — the inventory does not require wikilinks. Keep the alphabetical or original ordering of the existing list.
+> **There are new entries to add to this table.** For each entry in the NEW_ENTRIES payload that belongs to this category, insert a new row in the table in alphabetical position, using this exact format:
+>
+> `| [[<category>/<name>]] | <trigger> | <one_line_summary> |`
+>
+> (For CLI tools, the column header is `Invocation` instead of `Trigger`; use `CLI invocation` as the value.) After inserting, **find every count reference on this page and bump it** by the number of new entries you added. Count references include the headline line (e.g. "This repo deploys 23 AWS Lambda functions" → "24"), any subsection introductions, and any "There are N ..." sentences. You may also update the description column for *existing* rows whose detail page appears in the diff. Do not remove or reorder existing rows except to maintain alphabetical order around the new insertion.
 
-**Additional instruction for `wiki/infra/lambdas.md` specifically, when the run has Lambda NEW_ENTRIES** (append to INFRA INVENTORY block):
+**Additional instruction for `infra-inventory`** (append to base):
 
-> **DO NOT add a bullet for any of the following Lambda names, even if they appear in the diff: `<NEW_LAMBDA_MODULE_NAMES>`.** These are new Lambdas without runtime detail pages yet; adding them here would break lint E9 (count parity with `wiki/lambdas.md`). They will be added by the next `/repo-llm-wiki refresh`. You may still update bullet text or descriptions for *existing* Lambda names in the list.
+> This page is a flat resource inventory. For `wiki/infra/lambdas.md` (or similar resource-type pages), add a bullet for each new Terraform module in the diff (use the kebab-case module name, e.g. `latest-authorisations`), maintaining the original ordering. Then **find every count reference on this page and bump it** by the number of new resources added — including the page's opening sentence ("There are 23 Lambda functions ..." → "24"). For `wiki/infra.md` specifically, bump counts in: the `## Resource types` section bullets (`[[infra/lambdas]] — N Lambda functions`), the `## Small inventories` table if relevant, and any prose count references in the overview.
 
-**Additional instruction for `wiki/infra.md`, when the run has Lambda NEW_ENTRIES** (append to INFRA INVENTORY block):
-
-> Do not change the Lambda count in any reference like "24 Lambda functions" or "[[infra/lambdas]] — N Lambda functions". The wiki keeps the prior count until `refresh` runs.
-
-**Additional instruction for DETAIL pages** (append to base):
+**Additional instruction for `detail-page`** (append to base):
 
 > This page describes a single component. Update its prose to reflect the diff (e.g. a service gaining a new method, a handler gaining a new endpoint). Keep the page 3-6 sentences. Do not split into subsections.
 
-Subagent returns the full new page body. Write it directly, overwriting the prior content.
+**Additional instruction for `index-with-count-bump`** (append to base):
 
-**`wiki/index.md`**: update only if a page was added or removed in this run (rare). Otherwise leave untouched.
+> Two passes:
+> 1. Find the `## Categories` section. For each category in NEW_ENTRIES, update its bullet to reflect the new count (e.g. `- [[lambdas]] — 23 Lambda functions` → `- [[lambdas]] — 24 Lambda functions`).
+> 2. Find the overview / introduction paragraph (typically the first prose paragraph after the H1 metadata line). If it states counts like "deployed as 23 AWS Lambda functions, with 2 companion CLI tools" or "N Lambda functions" or "N CLI tools", bump those numbers to the new totals as well.
+>
+> Leave all other content (tech stack, tests, meta) untouched. Do not rewrite the overview prose — only edit the specific numbers.
+
+**Additional instruction for `prose`** (append to base):
+
+> Update the relevant subsection(s) to reflect what changed. Keep the rest untouched.
+
+Subagent returns the full new page body. Write it directly, overwriting the prior content.
 
 ---
 
-## Step 7 — Generate AUTO_SUMMARY
+## Step 8 — Generate AUTO_SUMMARY
 
 One inline LLM call (not a subagent). Input:
 - The output of `git diff --stat <FORK_SHA>..HEAD`
@@ -272,7 +326,7 @@ Prompt: *"In 1–2 sentences (max 280 chars), describe what changed in the code 
 
 ---
 
-## Step 8 — Prepend log entry
+## Step 9 — Prepend log entry
 
 Read `wiki/log.md`. After the `# Generation log` heading (and any blank line), insert:
 
@@ -298,33 +352,26 @@ Preserve all prior entries below verbatim.
 ## Completion summary
 
 ```
-Wiki story logged (<N> pages updated)
+Wiki story logged (<P> pages updated, <D> detail pages created)
 
-  <list of wiki pages updated this run, one per line>
+  Updated:
+    <list of pages updated, one per line>
+
+  Created:
+    <list of new detail pages, one per line>
 
 Description: <DEV_DESCRIPTION>
 SHA: <HEAD_SHA[0:7]>  Branch: <BRANCH>
 Files: <FILE_COUNT> (<LINES_ADDED>+/<LINES_REMOVED>-)
 Shared internal: <count>  (expected — no single page owns these)
 Unmatched files: <count>  (not covered by any wiki page)
-New top-level entries: <count>
 
 Run /repo-llm-wiki lint to validate.
 ```
 
 If `unmatched > 0` or `shared-internal > 0`, list those paths below the summary so the dev can spot-check.
 
-If `NEW_ENTRIES` is non-empty, append a loud block:
-
-```
-⚠ NEW TOP-LEVEL ENTRIES DETECTED
-
-These additions need a structural wiki update — story does not create new detail pages or list-page rows:
-
-  - <entry name> (category: lambdas | cli | packages) — <source path>
-
-Run /repo-llm-wiki refresh to generate the missing detail pages and update the category list. Lint may report E1/E9/E5 until refresh runs.
-```
+If `NEW_ENTRIES` is non-empty, the "Created" block above already lists them. Do not print an extra warning — the wiki is now consistent with the code, and `refresh` is not required.
 
 ---
 
@@ -336,9 +383,11 @@ Run /repo-llm-wiki refresh to generate the missing detail pages and update the c
 | Shallow clone / `merge-base` fails | Stop. Instruct dev to pass `--since <ref>`. |
 | Detached HEAD | `BRANCH = (detached at <HEAD_SHA[0:7]>)`. Proceed. |
 | Only wiki files changed | Stop. *"Story touches only wiki/ — nothing to summarise."* |
-| File added that no page references | Try the fallback routing in Step 4; otherwise log as unmatched. Story does not create new top-level pages — those require `refresh`. |
+| File added that no page references | Try slug-derived routing (4a) first, then text-citation map (4b), then the fallback table (4c). If the file is under a brand-new `cmd/<X>/`, app/cmd/<X>/`, or top-level package, treat as a NEW_ENTRY (4d) and create a new detail page. Otherwise log as unmatched. |
 | File deleted that pages cite | Subagent for that page receives the deletion diff and must rewrite to remove dangling citations. |
 | `--since` ref invalid or not found | Let git error surface. Stop with the git error message. |
 | Description contains line-start `##` or pipe characters | Replace line-start `##` with `\#\#` and pipes with `\|` so the Markdown bullet stays well-formed. Inline backticks in the description are fine — leave them. |
 | Subagent returns a page with a broken wikilink | Write the page anyway; lint will catch it. Do not block the run. |
-| Branch adds a new Lambda / package not yet on any wiki page | Files routed to the parent category list page (`lambdas.md` etc) where possible; flagged unmatched otherwise. Tell the dev in the completion summary to run `refresh` for new top-level entries. |
+| Branch adds a new Lambda / CLI / package | Detected as NEW_ENTRY in Step 4d. Story spawns a NEW-DETAIL subagent (Subagent A-style) to read source and produce flow narrative, writes `wiki/<category>/<name>.md` directly, then has the list-page subagent insert a wikilink row + bump the count. Index page count is also bumped. No `refresh` follow-up needed. |
+| NEW_ENTRY but `app/internal/handler/<name>/` does not exist (handler-less Lambda) | NEW-DETAIL subagent reads just `main.go` and produces a best-effort flow narrative using only that. If the narrative is < 200 chars (lint W3), it's still written — the dev can run `refresh` later for a richer pass. |
+| NEW_ENTRY is a CLI tool but Terraform module exists with similar name | The infra-counterpart steps in 4d apply only to Lambdas. For CLI NEW_ENTRIES, no infra page is added to AFFECTED_PAGES. |
